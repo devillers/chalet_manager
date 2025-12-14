@@ -1,0 +1,505 @@
+// app/onboarding/page.tsx
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import type { InputHTMLAttributes, TextareaHTMLAttributes } from "react";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
+
+function clampText(txt: string, max = 220) {
+  const s = String(txt || "").trim();
+  if (s.length <= max) return s;
+  return s.slice(0, max).trim() + "…";
+}
+
+function nonEmpty(v?: string | null) {
+  return typeof v === "string" && v.trim().length > 0;
+}
+
+function Field({
+  label,
+  error,
+  children,
+}: {
+  label: string;
+  error?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="text-sm font-medium text-slate-700">{label}</label>
+      {children}
+      {error ? <p className="text-xs text-red-600">{error}</p> : null}
+    </div>
+  );
+}
+
+function Input(props: InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={[
+        "w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none",
+        "focus:border-slate-300 focus:ring-0",
+        props.className ?? "",
+      ].join(" ")}
+    />
+  );
+}
+
+function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      className={[
+        "w-full min-h-[140px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none",
+        "focus:border-slate-300 focus:ring-0",
+        props.className ?? "",
+      ].join(" ")}
+    />
+  );
+}
+
+const schema = z.object({
+  // 11 champs
+  ownerName: z.string().min(2, "Nom requis"),
+  ownerEmail: z.string().email("Email invalide"),
+  ownerPhone: z.string().min(6, "Téléphone requis"),
+
+  name: z.string().min(2, "Nom du bien requis"),
+  region: z.string().min(2, "Région requise"),
+  country: z.string().min(2, "Pays requis"),
+
+  maxGuests: z.number().finite().int().min(1, "≥ 1"),
+  bedrooms: z.number().finite().int().min(1, "≥ 1"),
+  bathrooms: z.number().finite().int().min(1, "≥ 1"),
+
+  shortDescription: z.string().min(10, "Description courte trop courte"),
+  longDescription: z.string().min(50, "Description longue trop courte (≥ 50)"),
+});
+
+type FormValues = z.infer<typeof schema>;
+type PickedImage = { file: File; url: string; name: string; size: number };
+
+export default function OnboardingPage() {
+  const [step, setStep] = useState<1 | 2>(1);
+
+  const [picked, setPicked] = useState<PickedImage[]>([]);
+  const [heroIndex, setHeroIndex] = useState<number>(0);
+
+  const [submitting, setSubmitting] = useState(false);
+  const [serverError, setServerError] = useState("");
+  const [result, setResult] = useState<any>(null);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+    watch,
+    trigger,
+  } = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: {
+      country: "France",
+      maxGuests: 1,
+      bedrooms: 1,
+      bathrooms: 1,
+    },
+    mode: "onTouched",
+  });
+
+  const v = watch();
+
+  // Cleanup blob URLs
+  useEffect(() => {
+    return () => picked.forEach((p) => URL.revokeObjectURL(p.url));
+  }, [picked]);
+
+  function openFilePicker() {
+    fileInputRef.current?.click();
+  }
+
+  function addFiles(files: FileList | File[]) {
+    const arr = Array.from(files || []);
+    const imagesOnly = arr.filter((f) => f.type.startsWith("image/"));
+    if (!imagesOnly.length) return;
+
+    setPicked((prev) => {
+      const merged = [...prev];
+      for (const f of imagesOnly) {
+        if (merged.length >= 20) break;
+        const exists = merged.some((x) => x.name === f.name && x.size === f.size);
+        if (exists) continue;
+
+        merged.push({
+          file: f,
+          name: f.name,
+          size: f.size,
+          url: URL.createObjectURL(f),
+        });
+      }
+      return merged;
+    });
+
+    // si aucune image avant, hero=0
+    setHeroIndex((h) => (picked.length === 0 ? 0 : h));
+  }
+
+  function onFilePick(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!e.target.files) return;
+    addFiles(e.target.files);
+    e.target.value = "";
+  }
+
+  function removeImage(index: number) {
+    setPicked((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      setHeroIndex((h) => {
+        if (next.length === 0) return 0;
+        if (index === h) return 0;
+        if (index < h) return Math.max(0, h - 1);
+        return Math.min(h, next.length - 1);
+      });
+      return next;
+    });
+  }
+
+  function toggleHero(index: number) {
+    setHeroIndex(index);
+  }
+
+  async function goNext() {
+    const ok = await trigger(["ownerName", "ownerEmail", "ownerPhone"]);
+    if (ok) setStep(2);
+  }
+
+  function goBack() {
+    setStep(1);
+  }
+
+  const onSubmit = handleSubmit(async (formValues) => {
+    setSubmitting(true);
+    setServerError("");
+    setResult(null);
+
+    try {
+      const fd = new FormData();
+
+      // OwnerSite (schema fields)
+      fd.append("ownerName", formValues.ownerName);
+      fd.append("ownerEmail", formValues.ownerEmail);
+      fd.append("ownerPhone", formValues.ownerPhone);
+
+      // Villa (schema fields)
+      fd.append("name", formValues.name);
+      fd.append("region", formValues.region);
+      fd.append("country", formValues.country);
+
+      fd.append("maxGuests", String(formValues.maxGuests));
+      fd.append("bedrooms", String(formValues.bedrooms));
+      fd.append("bathrooms", String(formValues.bathrooms));
+
+      fd.append("shortDescription", formValues.shortDescription);
+      fd.append("longDescription", formValues.longDescription);
+
+      // Hero + images (optionnel)
+      fd.append("heroIndex", String(heroIndex));
+      picked.forEach((p) => fd.append("images", p.file));
+
+      const res = await fetch("/api/owner/onboarding", {
+        method: "POST",
+        body: fd,
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setServerError(data?.error || "Erreur lors de la création.");
+        return;
+      }
+
+      setResult(data);
+    } catch {
+      setServerError("Erreur réseau.");
+    } finally {
+      setSubmitting(false);
+    }
+  });
+
+  return (
+    <main className="mx-auto max-w-6xl px-4 py-10">
+      <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+        {/* FORM */}
+        <section className="rounded-3xl bg-white p-6 shadow-lg ring-1 ring-slate-100">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+                Onboarding propriétaire
+              </h1>
+              <p className="mt-1 text-sm text-slate-600">Étape {step}/2</p>
+            </div>
+          </div>
+
+          <form className="mt-6 space-y-8" onSubmit={onSubmit}>
+            {/* STEP 1 */}
+            {step === 1 ? (
+              <div className="space-y-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Étape 1 — Propriétaire
+                </p>
+
+                <Field label="Nom du propriétaire" error={errors.ownerName?.message}>
+                  <Input placeholder="Jean Dupont" {...register("ownerName")} />
+                </Field>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field label="Email" error={errors.ownerEmail?.message}>
+                    <Input placeholder="email@domaine.com" {...register("ownerEmail")} />
+                  </Field>
+                  <Field label="Téléphone" error={errors.ownerPhone?.message}>
+                    <Input placeholder="+33…" {...register("ownerPhone")} />
+                  </Field>
+                </div>
+
+                <div className="flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={goNext}
+                    className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-medium text-white hover:bg-slate-800"
+                  >
+                    Continuer
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {/* STEP 2 */}
+            {step === 2 ? (
+              <div className="space-y-6">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Étape 2 — Villa
+                </p>
+
+                <Field label="Nom du bien" error={errors.name?.message}>
+                  <Input placeholder="Chalet des Airelles" {...register("name")} />
+                </Field>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field label="Région / zone" error={errors.region?.message}>
+                    <Input placeholder="Haute Savoie" {...register("region")} />
+                  </Field>
+                  <Field label="Pays" error={errors.country?.message}>
+                    <Input placeholder="France" {...register("country")} />
+                  </Field>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-3">
+                  <Field label="Voyageurs max" error={errors.maxGuests?.message}>
+                    <Input type="number" min={1} {...register("maxGuests", { valueAsNumber: true })} />
+                  </Field>
+                  <Field label="Chambres" error={errors.bedrooms?.message}>
+                    <Input type="number" min={1} {...register("bedrooms", { valueAsNumber: true })} />
+                  </Field>
+                  <Field label="Salles de bain" error={errors.bathrooms?.message}>
+                    <Input type="number" min={1} {...register("bathrooms", { valueAsNumber: true })} />
+                  </Field>
+                </div>
+
+                <Field label="Description courte" error={errors.shortDescription?.message}>
+                  <Textarea rows={3} placeholder="2–3 phrases…" {...register("shortDescription")} />
+                </Field>
+
+                <Field label="Description longue" error={errors.longDescription?.message}>
+                  <Textarea rows={7} placeholder="Texte complet…" {...register("longDescription")} />
+                </Field>
+
+                {/* DROPZONE */}
+                <div className="space-y-3">
+                  <p className="text-sm font-medium text-slate-700">
+                    Photos (max 20) + sélectionner la hero
+                  </p>
+
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={onFilePick}
+                    className="hidden"
+                  />
+
+                  <div
+                    onClick={openFilePicker}
+                    onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
+                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
+                    onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDragOver(false);
+                      if (e.dataTransfer?.files) addFiles(e.dataTransfer.files);
+                    }}
+                    className={[
+                      "cursor-pointer rounded-3xl border-2 border-dashed p-6",
+                      dragOver ? "border-slate-400 bg-slate-50" : "border-slate-200 bg-white",
+                    ].join(" ")}
+                  >
+                    <p className="text-sm font-medium text-slate-900">
+                      Glisser-déposer des images ici
+                    </p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      ou cliquer pour sélectionner des fichiers
+                    </p>
+                    <p className="mt-2 text-xs text-slate-500">
+                      {picked.length}/20 sélectionnées
+                    </p>
+                  </div>
+
+                  {picked.length ? (
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      {picked.map((img, idx) => {
+                        const isHero = idx === heroIndex;
+                        return (
+                          <div
+                            key={`${img.name}-${img.size}-${idx}`}
+                            className="overflow-hidden rounded-2xl ring-1 ring-slate-100"
+                          >
+                            <div className="relative aspect-4/3 bg-slate-50">
+                              <img
+                                src={img.url}
+                                alt={img.name}
+                                className="h-full w-full object-cover"
+                              />
+                              {isHero ? (
+                                <div className="absolute left-3 top-3 rounded-full bg-slate-900 px-3 py-1 text-xs font-medium text-white">
+                                  Hero
+                                </div>
+                              ) : null}
+                            </div>
+
+                            <div className="flex items-center justify-between gap-2 p-3">
+                              <label className="flex items-center gap-2 text-xs text-slate-700">
+                                <input
+                                  type="radio"
+                                  name="hero"
+                                  className="h-4 w-4 accent-slate-900"
+                                  checked={isHero}
+                                  onChange={() => toggleHero(idx)}
+                                />
+                                Hero
+                              </label>
+
+                              <button
+                                type="button"
+                                onClick={() => removeImage(idx)}
+                                className="rounded-xl bg-slate-100 px-3 py-1 text-xs text-slate-700 hover:bg-slate-200"
+                              >
+                                Retirer
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+
+                {serverError ? <p className="text-sm text-red-600">{serverError}</p> : null}
+
+                <div className="flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={goBack}
+                    className="rounded-2xl bg-slate-100 px-5 py-3 text-sm font-medium text-slate-800 hover:bg-slate-200"
+                  >
+                    Retour
+                  </button>
+
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                  >
+                    {submitting ? "Création…" : "Créer"}
+                  </button>
+                </div>
+
+                {result ? (
+                  <div className="rounded-3xl border border-emerald-100 bg-emerald-50 p-5">
+                    <p className="text-sm font-medium text-emerald-900">Créé avec succès</p>
+                    <div className="mt-3 space-y-2 text-sm text-emerald-900">
+                      {result.publicUrl ? (
+                        <p>
+                          <span className="font-medium">Fiche publique :</span>{" "}
+                          <a className="underline" href={result.publicUrl} target="_blank" rel="noreferrer">
+                            {result.publicUrl}
+                          </a>
+                        </p>
+                      ) : null}
+                      {result.ownerUrl ? (
+                        <p>
+                          <span className="font-medium">Espace owner :</span>{" "}
+                          <a className="underline" href={result.ownerUrl} target="_blank" rel="noreferrer">
+                            {result.ownerUrl}
+                          </a>
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </form>
+        </section>
+
+        {/* ASIDE */}
+        <aside className="h-fit rounded-3xl bg-white p-6 shadow-lg ring-1 ring-slate-100 lg:sticky lg:top-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+            Aperçu
+          </p>
+
+          <div className="mt-4 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-100">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Owner
+            </p>
+            <p className="mt-2 text-base font-semibold text-slate-900">
+              {nonEmpty(v.ownerName) ? v.ownerName : "—"}
+            </p>
+            {nonEmpty(v.ownerEmail) ? <p className="mt-1 text-sm text-slate-700">{v.ownerEmail}</p> : null}
+            {nonEmpty(v.ownerPhone) ? <p className="mt-1 text-sm text-slate-700">{v.ownerPhone}</p> : null}
+          </div>
+
+          <div className="mt-4 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-100">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Villa
+            </p>
+            <p className="mt-2 text-lg font-semibold text-slate-900">
+              {nonEmpty(v.name) ? v.name : "—"}
+            </p>
+            <p className="mt-1 text-sm text-slate-700">
+              {nonEmpty(v.region) ? v.region : "—"} · {nonEmpty(v.country) ? v.country : "—"}
+            </p>
+            <p className="mt-2 text-sm text-slate-700">
+              {typeof v.maxGuests === "number" ? `${v.maxGuests} pers.` : "—"}
+              {typeof v.bedrooms === "number" ? ` · ${v.bedrooms} ch.` : ""}
+              {typeof v.bathrooms === "number" ? ` · ${v.bathrooms} sdb.` : ""}
+            </p>
+
+            {nonEmpty(v.shortDescription) ? (
+              <p className="mt-3 text-sm text-slate-700">{clampText(v.shortDescription, 160)}</p>
+            ) : null}
+
+            {picked.length ? (
+              <p className="mt-3 text-xs text-slate-600">
+                Photos: {picked.length} · Hero #{heroIndex + 1}
+              </p>
+            ) : null}
+          </div>
+        </aside>
+      </div>
+    </main>
+  );
+}
