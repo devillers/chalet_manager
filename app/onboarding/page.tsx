@@ -22,6 +22,14 @@ function nonEmpty(v?: string | null) {
   return typeof v === "string" && v.trim().length > 0;
 }
 
+function splitLines(input?: string | null) {
+  if (!input) return [] as string[];
+  return String(input)
+    .split(/\r?\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 function Field({
   label,
   error,
@@ -66,22 +74,65 @@ function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   );
 }
 
-const schema = z.object({
-  ownerName: z.string().min(2, "Nom requis"),
-  ownerEmail: z.string().email("Email invalide"),
-  ownerPhone: z.string().min(6, "Téléphone requis"),
+const schema = z
+  .object({
+    // Propriétaire
+    ownerName: z.string().min(2, "Nom requis"),
+    ownerEmail: z.string().email("Email invalide"),
+    ownerPhone: z.string().min(6, "Téléphone requis"),
 
-  name: z.string().min(2, "Nom du bien requis"),
-  region: z.string().min(2, "Région requise"),
-  country: z.string().min(2, "Pays requis"),
+    // Villa identités / adresse
+    name: z.string().min(2, "Nom du bien requis"),
+    street: z.string().min(2, "Adresse requise"),
+    postalCode: z.string().min(3, "Code postal requis"),
+    city: z.string().min(2, "Ville requise"),
+    region: z.string().min(2, "Région requise"),
+    country: z.string().min(2, "Pays requis"),
 
-  maxGuests: z.number().finite().int().min(1, "≥ 1"),
-  bedrooms: z.number().finite().int().min(1, "≥ 1"),
-  bathrooms: z.number().finite().int().min(1, "≥ 1"),
+    // Capacités
+    maxGuests: z.number().finite().int().min(1, "≥ 1"),
+    bedrooms: z.number().finite().int().min(1, "≥ 1"),
+    bathrooms: z.number().finite().int().min(1, "≥ 1"),
 
-  shortDescription: z.string().min(10, "Description courte trop courte"),
-  longDescription: z.string().min(50, "Description longue trop courte (≥ 50)"),
-});
+    // Prix & ménage
+    priceMin: z.number().finite().min(0, "≥ 0"),
+    priceMax: z.number().finite().min(0, "≥ 0").optional(),
+    cleaningIncluded: z.boolean().default(false),
+    cleaningPrice: z.number().finite().min(0, "≥ 0").optional(),
+
+    // Descriptions
+    shortDescription: z.string().min(10, "Description courte trop courte"),
+    longDescription: z.string().min(50, "Description longue trop courte (≥ 50)"),
+
+    // Environs
+    surroundingsIntro: z.string().max(800, "Trop long").optional(),
+    environmentType: z.string().max(200, "Trop long").optional(),
+    distancesText: z.string().max(1200, "Trop long").optional(),
+
+    // Textareas multi-lignes pour listes
+    quickHighlightsText: z.string().max(800, "Trop long").optional(),
+    keyAmenitiesText: z.string().max(1200, "Trop long").optional(),
+    similarVillasText: z.string().max(800, "Trop long").optional(),
+
+    // Blocs d'info
+    goodToKnowText: z.string().max(1200, "Trop long").optional(),
+    conciergeSubtitle: z.string().max(300, "Trop long").optional(),
+    conciergePointsText: z.string().max(1200, "Trop long").optional(),
+    extraInfoText: z.string().max(1200, "Trop long").optional(),
+
+    // Témoignages (1 par ligne: nom | date | note | texte)
+    testimonialsText: z.string().max(4000, "Trop long").optional(),
+  })
+  .superRefine((values, ctx) => {
+    // Prix max ≥ prix min si présent
+    if (typeof values.priceMax === "number" && values.priceMax < values.priceMin) {
+      ctx.addIssue({ code: "custom", path: ["priceMax"], message: "Doit être ≥ prix min" });
+    }
+    // Si ménage = oui, prix ménage requis
+    if (values.cleaningIncluded && typeof values.cleaningPrice !== "number") {
+      ctx.addIssue({ code: "custom", path: ["cleaningPrice"], message: "Requis si ménage = oui" });
+    }
+  });
 
 type FormValues = z.infer<typeof schema>;
 type PickedImage = { file: File; url: string; name: string; size: number };
@@ -119,6 +170,7 @@ export default function OnboardingPage() {
       maxGuests: 1,
       bedrooms: 1,
       bathrooms: 1,
+      cleaningIncluded: false,
     },
     mode: "onTouched",
   });
@@ -221,6 +273,9 @@ export default function OnboardingPage() {
       fd.append("ownerPhone", formValues.ownerPhone);
 
       fd.append("name", formValues.name);
+      fd.append("street", formValues.street);
+      fd.append("postalCode", formValues.postalCode);
+      fd.append("city", formValues.city);
       fd.append("region", formValues.region);
       fd.append("country", formValues.country);
 
@@ -230,6 +285,57 @@ export default function OnboardingPage() {
 
       fd.append("shortDescription", formValues.shortDescription);
       fd.append("longDescription", formValues.longDescription);
+
+      // Prix & ménage
+      fd.append("priceMin", String(formValues.priceMin));
+      if (typeof formValues.priceMax === "number") {
+        fd.append("priceMax", String(formValues.priceMax));
+      }
+      fd.append("cleaningIncluded", String(Boolean(formValues.cleaningIncluded)));
+      if (typeof formValues.cleaningPrice === "number") {
+        fd.append("cleaningPrice", String(formValues.cleaningPrice));
+      }
+
+      // Listes multi-lignes
+      const quickHighlights = splitLines(formValues.quickHighlightsText || "");
+      const keyAmenities = splitLines(formValues.keyAmenitiesText || "");
+      const similarVillas = splitLines(formValues.similarVillasText || "");
+      fd.append("quickHighlights", JSON.stringify(quickHighlights));
+      fd.append("keyAmenities", JSON.stringify(keyAmenities));
+      fd.append("similarVillas", JSON.stringify(similarVillas));
+
+      // Environs
+      if (formValues.surroundingsIntro) fd.append("surroundingsIntro", formValues.surroundingsIntro);
+      if (formValues.environmentType) fd.append("environmentType", formValues.environmentType);
+      if (formValues.distancesText) fd.append("distancesText", formValues.distancesText);
+
+      // Info blocks
+      const goodToKnow = splitLines(formValues.goodToKnowText || "");
+      const conciergePoints = splitLines(formValues.conciergePointsText || "");
+      const extraInfo = splitLines(formValues.extraInfoText || "");
+      if (formValues.conciergeSubtitle) fd.append("conciergeSubtitle", formValues.conciergeSubtitle);
+      fd.append("goodToKnow", JSON.stringify(goodToKnow));
+      fd.append("conciergePoints", JSON.stringify(conciergePoints));
+      fd.append("extraInfo", JSON.stringify(extraInfo));
+
+      // Témoignages (nom | date | note | texte)
+      if (formValues.testimonialsText) {
+        const testimonials = splitLines(formValues.testimonialsText)
+          .map((line) => {
+            const parts = line.split("|").map((s) => s.trim());
+            if (parts.length < 4) return null;
+            const [name, date, ratingStr, text] = parts;
+            const rating = Number(ratingStr);
+            return {
+              name,
+              date,
+              text,
+              rating: Number.isFinite(rating) ? Math.max(0, Math.min(5, rating)) : undefined,
+            };
+          })
+          .filter((t) => t && t.name && t.text);
+        fd.append("testimonials", JSON.stringify(testimonials));
+      }
 
       fd.append("heroIndex", String(heroIndex));
       picked.forEach((p) => fd.append("images", p.file));
@@ -321,6 +427,19 @@ export default function OnboardingPage() {
                   </Field>
                 </div>
 
+                {/* Adresse complète */}
+                <div className="grid gap-4 md:grid-cols-3">
+                  <Field label="Numéro et rue" error={errors.street?.message}>
+                    <Input placeholder="12 rue des Airelles" {...register("street")} />
+                  </Field>
+                  <Field label="Code postal" error={errors.postalCode?.message}>
+                    <Input placeholder="74400" {...register("postalCode")} />
+                  </Field>
+                  <Field label="Ville" error={errors.city?.message}>
+                    <Input placeholder="Chamonix" {...register("city")} />
+                  </Field>
+                </div>
+
                 <div className="grid gap-4 md:grid-cols-3">
                   <Field label="Voyageurs max" error={errors.maxGuests?.message}>
                     <Input
@@ -345,12 +464,86 @@ export default function OnboardingPage() {
                   </Field>
                 </div>
 
+                {/* Prix & ménage */}
+                <div className="grid gap-4 md:grid-cols-3">
+                  <Field label="Prix min / nuit (EUR)" error={errors.priceMin?.message}>
+                    <Input type="number" min={0} step={1} {...register("priceMin", { valueAsNumber: true })} />
+                  </Field>
+                  <Field label="Prix max / nuit (EUR)" error={errors.priceMax?.message}>
+                    <Input type="number" min={0} step={1} {...register("priceMax", { valueAsNumber: true })} />
+                  </Field>
+                  <Field label="Ménage inclus ?" error={errors.cleaningIncluded?.message as string}>
+                    <input type="checkbox" className="h-4 w-4 align-middle" {...register("cleaningIncluded")} />
+                  </Field>
+                </div>
+                <div className="grid gap-4 md:grid-cols-3">
+                  <Field label="Prix ménage (EUR)" error={errors.cleaningPrice?.message}>
+                    <Input type="number" min={0} step={1} {...register("cleaningPrice", { valueAsNumber: true })} />
+                  </Field>
+                </div>
+
                 <Field label="Description courte" error={errors.shortDescription?.message}>
                   <Textarea rows={3} placeholder="2–3 phrases…" {...register("shortDescription")} />
                 </Field>
 
                 <Field label="Description longue" error={errors.longDescription?.message}>
                   <Textarea rows={7} placeholder="Texte complet…" {...register("longDescription")} />
+                </Field>
+
+                {/* Incontournables & Équipements (amenities) */}
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field label="Incontournables (1 par ligne)">
+                    <Textarea rows={4} placeholder="Vue lac\nCheminée\nSpa extérieur" {...register("quickHighlightsText")} />
+                  </Field>
+                  <Field label="Équipements / amenities (1 par ligne)">
+                    <Textarea rows={4} placeholder="Piscine chauffée\nSauna\nSalle de sport" {...register("keyAmenitiesText")} />
+                  </Field>
+                </div>
+
+                {/* Alentours */}
+                <div className="space-y-4 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-100">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-medium text-slate-800">Les alentours</p>
+                  </div>
+                  <Field label="Accroche / introduction">
+                    <Textarea rows={3} placeholder="Présente le quartier, l'accès aux pistes, les commerces..." {...register("surroundingsIntro")} />
+                  </Field>
+                  <Field label="Type d'environnement">
+                    <Input placeholder="Village authentique, au bord du lac, au pied des pistes..." {...register("environmentType")} />
+                  </Field>
+                  <Field label="Distances (1 par ligne: libellé | durée | car/walk/boat)">
+                    <Textarea rows={3} placeholder="Supermarché | 5 min | car\nPistes | 10 min | walk" {...register("distancesText")} />
+                  </Field>
+                </div>
+
+                {/* Blocs d'info */}
+                <div className="space-y-4 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-100">
+                  <p className="text-sm font-medium text-slate-800">Informations & conciergerie</p>
+                  <Field label="Bon à savoir (1 par ligne)">
+                    <Textarea rows={3} placeholder="Caution demandée\nCheck-in 16h\nNon fumeur" {...register("goodToKnowText")} />
+                  </Field>
+                  <Field label="Sous-titre conciergerie">
+                    <Input placeholder="Nos équipes organisent vos activités…" {...register("conciergeSubtitle")} />
+                  </Field>
+                  <Field label="Points conciergerie (1 par ligne)">
+                    <Textarea rows={3} placeholder="Chef à domicile\nLocation de ski\nTransferts privés" {...register("conciergePointsText")} />
+                  </Field>
+                  <Field label="Informations supplémentaires (1 par ligne)">
+                    <Textarea rows={3} placeholder="Animaux sur demande\nAccessible PMR (partiellement)" {...register("extraInfoText")} />
+                  </Field>
+                </div>
+
+                {/* Témoignages */}
+                <div className="space-y-4 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-100">
+                  <p className="text-sm font-medium text-slate-800">Témoignages</p>
+                  <Field label="1 par ligne: nom | date | note | texte">
+                    <Textarea rows={4} placeholder="Alice | 2024-08 | 5 | Séjour parfait !\nMarc | 2024-02 | 4.5 | Excellent emplacement" {...register("testimonialsText")} />
+                  </Field>
+                </div>
+
+                {/* Similar villas (slugs ou noms) */}
+                <Field label="Similar villas (slugs ou noms, 1 par ligne)">
+                  <Textarea rows={3} placeholder="chalet-aiglons\nchalet-bellevue" {...register("similarVillasText")} />
                 </Field>
 
                 {/* DROPZONE */}
@@ -567,6 +760,14 @@ export default function OnboardingPage() {
               </p>
             ) : null}
           </div>
+
+          {/* Aperçu prix */}
+          {typeof v.priceMin === "number" ? (
+            <p className="mt-3 text-sm text-slate-700">
+              Prix dès {v.priceMin.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} € / nuit
+              {typeof v.priceMax === "number" ? ` · jusqu’à ${v.priceMax.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} €` : ""}
+            </p>
+          ) : null}
         </aside>
       </div>
     </main>

@@ -53,6 +53,26 @@ function n(fd: FormData, key: string): number | undefined {
   return Number.isFinite(num) ? num : undefined;
 }
 
+function b(fd: FormData, key: string): boolean | undefined {
+  const v = fd.get(key);
+  if (v == null) return undefined;
+  const str = String(v).trim().toLowerCase();
+  if (str === "true" || str === "1" || str === "yes" || str === "on") return true;
+  if (str === "false" || str === "0" || str === "no" || str === "off") return false;
+  return undefined;
+}
+
+function parseJsonArray<T = unknown>(fd: FormData, key: string): T[] {
+  const raw = fd.get(key);
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(String(raw));
+    return Array.isArray(arr) ? (arr as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 function randomOwnerKey() {
   return `owner-${Math.random().toString(36).slice(2, 10)}-${Math.random()
     .toString(36)
@@ -99,13 +119,33 @@ type VillaPayload = {
   ownerSite: SanityRef;
   name: string;
   slug: { _type: "slug"; current: string };
+
+  // address
+  street: string;
+  postalCode: string;
+  city: string;
   region: string;
   country: string;
+
+  // capacity
   maxGuests: number;
   bedrooms: number;
   bathrooms: number;
+
+  // pricing
+  priceMin: number;
+  priceMax?: number;
+  cleaningIncluded?: boolean;
+  cleaningPrice?: number;
+
+  // content
   shortDescription: string;
   longDescription: string;
+  quickHighlights?: string[];
+  keyAmenities?: string[];
+  similarVillas?: SanityRef[];
+
+  // media
   heroImage?: SanityImage;
   gallery?: SanityGalleryItem[];
 };
@@ -130,12 +170,46 @@ export async function POST(req: Request) {
     const ownerPhone = s(fd, "ownerPhone");
 
     const villaName = s(fd, "name");
+    const street = s(fd, "street");
+    const postalCode = s(fd, "postalCode");
+    const city = s(fd, "city");
     const region = s(fd, "region");
     const country = s(fd, "country") || "France";
 
     const maxGuests = n(fd, "maxGuests");
     const bedrooms = n(fd, "bedrooms");
     const bathrooms = n(fd, "bathrooms");
+
+    const priceMin = n(fd, "priceMin");
+    const priceMax = n(fd, "priceMax");
+    const cleaningIncluded = b(fd, "cleaningIncluded");
+    const cleaningPrice = n(fd, "cleaningPrice");
+
+    const quickHighlights = parseJsonArray<string>(fd, "quickHighlights").map((s) => String(s || "").trim()).filter(Boolean);
+    const keyAmenities = parseJsonArray<string>(fd, "keyAmenities").map((s) => String(s || "").trim()).filter(Boolean);
+    const similarVillasSlugsOrNames = parseJsonArray<string>(fd, "similarVillas").map((s) => String(s || "").trim()).filter(Boolean);
+
+    // Environs
+    const surroundingsIntro = s(fd, "surroundingsIntro");
+    const environmentType = s(fd, "environmentType");
+    const distancesText = s(fd, "distancesText");
+    const distances = distancesText
+      ? distancesText.split(/\r?\n+/).map((line) => {
+          const [label, duration, byRaw] = line.split("|").map((p) => String(p || "").trim());
+          const by = byRaw === "car" || byRaw === "walk" || byRaw === "boat" ? byRaw : undefined;
+          if (!label || !duration || !by) return null;
+          return { _key: randomUUID(), _type: "distanceItem", label, duration, by } as const;
+        }).filter(Boolean) as Array<{ _key: string; _type: "distanceItem"; label: string; duration: string; by: "car"|"walk"|"boat" }>
+      : undefined;
+
+    // Info blocks
+    const goodToKnow = parseJsonArray<string>(fd, "goodToKnow").map((s) => String(s || "").trim()).filter(Boolean);
+    const conciergeSubtitle = s(fd, "conciergeSubtitle");
+    const conciergePoints = parseJsonArray<string>(fd, "conciergePoints").map((s) => String(s || "").trim()).filter(Boolean);
+    const extraInfo = parseJsonArray<string>(fd, "extraInfo").map((s) => String(s || "").trim()).filter(Boolean);
+
+    // Témoignages
+    const testimonials = parseJsonArray<{ name?: string; date?: string; text?: string; rating?: number }>(fd, "testimonials");
 
     const shortDescription = s(fd, "shortDescription");
     const longDescription = s(fd, "longDescription");
@@ -156,6 +230,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "region requis." }, { status: 400 });
     if (!country)
       return NextResponse.json({ error: "country requis." }, { status: 400 });
+    if (!street)
+      return NextResponse.json({ error: "street requis." }, { status: 400 });
+    if (!postalCode)
+      return NextResponse.json({ error: "postalCode requis." }, { status: 400 });
+    if (!city)
+      return NextResponse.json({ error: "city requis." }, { status: 400 });
 
     if (maxGuests === undefined || maxGuests < 1)
       return NextResponse.json(
@@ -184,6 +264,16 @@ export async function POST(req: Request) {
         { error: "longDescription trop courte (≥ 50)." },
         { status: 400 }
       );
+
+    if (typeof priceMin !== "number" || priceMin < 0) {
+      return NextResponse.json({ error: "priceMin invalide (≥ 0)." }, { status: 400 });
+    }
+    if (typeof priceMax === "number" && priceMax < priceMin) {
+      return NextResponse.json({ error: "priceMax doit être ≥ priceMin." }, { status: 400 });
+    }
+    if (cleaningIncluded === true && typeof cleaningPrice !== "number") {
+      return NextResponse.json({ error: "cleaningPrice requis si ménage = oui." }, { status: 400 });
+    }
 
     // Images (optionnel)
     const imageFiles = fd
@@ -279,6 +369,20 @@ export async function POST(req: Request) {
       ? existingVilla.slug
       : await ensureUniqueSlug(client, "villa", villaSlugBase);
 
+    // Similar villas references (best-effort lookup by slug or name)
+    let similarRefs: SanityRef[] | undefined = undefined;
+    if (similarVillasSlugsOrNames.length > 0) {
+      const foundIds: string[] = await client.fetch(
+        `array::compact(array::unique(${JSON.stringify(similarVillasSlugsOrNames)}[].map(s){
+          let q = *[_type=="villa" && (slug.current==s || name==s)][0]._id;
+          q
+        }))`
+      );
+      if (Array.isArray(foundIds) && foundIds.length) {
+        similarRefs = foundIds.map((id) => ({ _type: "reference", _ref: id }));
+      }
+    }
+
     const villaPayload: VillaPayload = {
       _type: "villa",
       ownerSite: { _type: "reference", _ref: ownerSiteId },
@@ -286,6 +390,9 @@ export async function POST(req: Request) {
       name: villaName,
       slug: { _type: "slug", current: villaSlug },
 
+      street,
+      postalCode,
+      city,
       region,
       country,
 
@@ -293,8 +400,28 @@ export async function POST(req: Request) {
       bedrooms,
       bathrooms,
 
+      priceMin,
+      priceMax: typeof priceMax === "number" ? priceMax : undefined,
+      cleaningIncluded: typeof cleaningIncluded === "boolean" ? cleaningIncluded : undefined,
+      cleaningPrice: typeof cleaningPrice === "number" ? cleaningPrice : undefined,
+
       shortDescription,
       longDescription,
+
+      quickHighlights: quickHighlights.length ? quickHighlights : undefined,
+      keyAmenities: keyAmenities.length ? keyAmenities : undefined,
+      similarVillas: similarRefs,
+
+      surroundingsIntro: surroundingsIntro || undefined,
+      environmentType: environmentType || undefined,
+      distances,
+
+      goodToKnow: goodToKnow.length ? goodToKnow : undefined,
+      conciergeSubtitle: conciergeSubtitle || undefined,
+      conciergePoints: conciergePoints.length ? conciergePoints : undefined,
+      extraInfo: extraInfo.length ? extraInfo : undefined,
+
+      testimonials: Array.isArray(testimonials) && testimonials.length ? testimonials : undefined,
 
       heroImage,
       gallery,

@@ -36,24 +36,23 @@ export function AvailabilityCalendarMini({
 
   const hasSync = disabled.length > 0;
 
-  // ✅ pas de setState dans un effect (rule react.dev)
+  // Dérive un lien webcal en n'utilisant que des données stables côté serveur
+  // pour éviter tout écart d'hydratation.
   const webcalHref = useMemo(() => {
     if (!subscribePath) return "";
     try {
-      // si subscribePath est absolu
+      // URL absolue => conversion http(s) -> webcal
       if (/^https?:\/\//.test(subscribePath)) {
         return subscribePath.replace(/^https?:\/\//, "webcal://");
       }
-
-      // si relative et qu'on a une base stable (recommandé)
-      const base =
-        process.env.NEXT_PUBLIC_SITE_URL ||
-        (typeof window !== "undefined" ? window.location.origin : "");
-
-      if (!base) return subscribePath;
-
-      const url = new URL(subscribePath, base);
-      return url.toString().replace(/^https?:\/\//, "webcal://");
+      // Chemin relatif: convertir uniquement si une base stable est fournie en env
+      const base = process.env.NEXT_PUBLIC_SITE_URL;
+      if (base) {
+        const url = new URL(subscribePath, base);
+        return url.toString().replace(/^https?:\/\//, "webcal://");
+      }
+      // Sinon, garder le chemin relatif afin d'être identique SSR/CSR
+      return subscribePath;
     } catch {
       return subscribePath;
     }

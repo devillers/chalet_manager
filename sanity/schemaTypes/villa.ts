@@ -12,6 +12,8 @@ export const villa = defineType({
     { name: "capacity", title: "Capacité" },
     { name: "pricing", title: "Prix" },
     { name: "content", title: "Contenu" },
+    { name: "surroundings", title: "Alentours" },
+    { name: "info", title: "Infos & conciergerie" },
     { name: "gallery", title: "Galerie" },
   ],
 
@@ -193,6 +195,24 @@ export const villa = defineType({
       validation: (Rule) => Rule.required().min(50),
     }),
 
+    // Listes simples pilotées par l’onboarding
+    defineField({
+      name: "quickHighlights",
+      title: "Incontournables (highlights)",
+      type: "array",
+      group: "content",
+      of: [{ type: "string" }],
+      validation: (Rule) => Rule.min(0),
+    }),
+    defineField({
+      name: "keyAmenities",
+      title: "Équipements clés (amenities)",
+      type: "array",
+      group: "content",
+      of: [{ type: "string" }],
+      validation: (Rule) => Rule.min(0),
+    }),
+
     defineField({
       name: "heroImage",
       title: "Hero image (optionnel)",
@@ -231,6 +251,113 @@ export const villa = defineType({
         },
       ],
       validation: (Rule) => Rule.required().min(1),
+    }),
+
+    // ALENTOURS -----------------------------------------------------------
+    defineField({
+      name: "surroundingsIntro",
+      title: "Accroche / introduction",
+      type: "text",
+      rows: 3,
+      group: "surroundings",
+    }),
+    defineField({
+      name: "environmentType",
+      title: "Type d'environnement",
+      type: "string",
+      group: "surroundings",
+    }),
+    defineField({
+      name: "distances",
+      title: "Distances",
+      type: "array",
+      group: "surroundings",
+      of: [
+        defineField({
+          name: "distanceItem",
+          type: "object",
+          fields: [
+            { name: "label", type: "string", title: "Label" },
+            { name: "duration", type: "string", title: "Durée" },
+            { name: "by", type: "string", title: "Moyen", options: { list: ["car", "walk", "boat"] } },
+          ],
+        }),
+      ],
+    }),
+
+    // INFOS & CONCIERGERIE -----------------------------------------------
+    defineField({
+      name: "goodToKnow",
+      title: "Bon à savoir",
+      type: "array",
+      group: "info",
+      of: [{ type: "string" }],
+    }),
+    defineField({
+      name: "conciergeSubtitle",
+      title: "Sous-titre conciergerie",
+      type: "string",
+      group: "info",
+    }),
+    defineField({
+      name: "conciergePoints",
+      title: "Points conciergerie",
+      type: "array",
+      group: "info",
+      of: [{ type: "string" }],
+    }),
+    defineField({
+      name: "extraInfo",
+      title: "Informations supplémentaires",
+      type: "array",
+      group: "info",
+      of: [{ type: "string" }],
+    }),
+
+    // TÉMOIGNAGES ---------------------------------------------------------
+    defineField({
+      name: "testimonials",
+      title: "Témoignages",
+      type: "array",
+      group: "info",
+      of: [
+        defineField({
+          name: "testimonial",
+          type: "object",
+          fields: [
+            { name: "name", type: "string", title: "Nom" },
+            { name: "date", type: "string", title: "Date" },
+            { name: "text", type: "text", title: "Texte", rows: 3 },
+            { name: "rating", type: "number", title: "Note (0-5)" },
+          ],
+        }),
+      ],
+    }),
+
+    // SIMILAR VILLAS ------------------------------------------------------
+    defineField({
+      name: "similarVillas",
+      title: "Villas similaires",
+      type: "array",
+      group: "content",
+      of: [
+        defineField({
+          name: "similarVillaLink",
+          type: "object",
+          fields: [
+            defineField({
+              name: "relatedVilla",
+              title: "Villa liée",
+              type: "reference",
+              to: [{ type: "villa" }],
+              validation: (Rule) => Rule.required(),
+            }),
+            defineField({ name: "extraPersonsBadge", title: "Badge personnes supplémentaires", type: "string" }),
+            defineField({ name: "periodSuggestion", title: "Suggestion de période", type: "string" }),
+          ],
+        }),
+      ],
+      validation: (Rule) => Rule.min(0),
     }),
   ],
 

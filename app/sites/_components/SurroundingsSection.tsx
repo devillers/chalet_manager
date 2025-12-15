@@ -44,7 +44,11 @@ function isValidLatLng(lat: unknown, lng: unknown) {
  * - cache 1 jour (revalidate)
  */
 async function geocodeWithMapbox(query: string): Promise<{ lat: number; lng: number } | null> {
-  const token = process.env.MAPBOX_SECRET_TOKEN || process.env.MAPBOX_TOKEN;
+  // Fallback to NEXT_PUBLIC_MAPBOX_TOKEN so SSR can geocode if only the public token is configured
+  const token =
+    process.env.MAPBOX_SECRET_TOKEN ||
+    process.env.MAPBOX_TOKEN ||
+    process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
   if (!token || !isNonEmptyString(query)) return null;
 
   const encoded = encodeURIComponent(query.trim());
