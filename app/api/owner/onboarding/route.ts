@@ -113,6 +113,15 @@ async function uploadImages(
 type SanityRef = { _type: "reference"; _ref: string };
 type SanityImage = { _type: "image"; asset: SanityRef; alt?: string };
 type SanityGalleryItem = SanityImage & { _key: string };
+type DistanceBy = "car" | "walk" | "boat";
+type SanityDistanceItem = {
+  _key: string;
+  _type: "distanceItem";
+  label: string;
+  duration: string;
+  by: DistanceBy;
+};
+type TestimonialItem = { name?: string; date?: string; text?: string; rating?: number };
 
 type VillaPayload = {
   _type: "villa";
@@ -145,9 +154,22 @@ type VillaPayload = {
   keyAmenities?: string[];
   similarVillas?: SanityRef[];
 
+  // surroundings & info blocks
+  surroundingsIntro?: string;
+  environmentType?: string;
+  distances?: SanityDistanceItem[];
+  goodToKnow?: string[];
+  conciergeSubtitle?: string;
+  conciergePoints?: string[];
+  extraInfo?: string[];
+  testimonials?: TestimonialItem[];
+
   // media
   heroImage?: SanityImage;
   gallery?: SanityGalleryItem[];
+
+  // geopoint for global map
+  location?: { _type: "geopoint"; lat: number; lng: number };
 };
 
 function errorMessage(err: unknown) {
@@ -214,9 +236,34 @@ export async function POST(req: Request) {
     const shortDescription = s(fd, "shortDescription");
     const longDescription = s(fd, "longDescription");
 
-    const heroIndexRaw = n(fd, "heroIndex");
-    const heroIndex =
-      typeof heroIndexRaw === "number" && heroIndexRaw >= 0 ? heroIndexRaw : 0;
+  const heroIndexRaw = n(fd, "heroIndex");
+  const heroIndex =
+    typeof heroIndexRaw === "number" && heroIndexRaw >= 0 ? heroIndexRaw : 0;
+
+  // Geocode address (best-effort) to set "location" geopoint for the map
+  async function geocodeAddress(query: string): Promise<{ lat: number; lng: number } | null> {
+    try {
+      const token =
+        process.env.MAPBOX_SECRET_TOKEN ||
+        process.env.MAPBOX_TOKEN ||
+        process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+      if (!token || !query.trim()) return null;
+      const url =
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json` +
+        `?access_token=${encodeURIComponent(token)}` +
+        `&limit=1&language=fr`;
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const data = (await res.json()) as { features?: Array<{ center?: [number, number] }> };
+      const center = data.features?.[0]?.center;
+      if (!center || center.length !== 2) return null;
+      const [lng, lat] = center;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      return { lat, lng };
+    } catch {
+      return null;
+    }
+  }
 
     // validations
     if (!ownerName)
@@ -383,6 +430,13 @@ export async function POST(req: Request) {
       }
     }
 
+    const addressForGeocode = [street, postalCode, city, country]
+      .map((x) => String(x || "").trim())
+      .filter(Boolean)
+      .join(", ");
+
+    const coords = await geocodeAddress(addressForGeocode);
+
     const villaPayload: VillaPayload = {
       _type: "villa",
       ownerSite: { _type: "reference", _ref: ownerSiteId },
@@ -422,6 +476,8 @@ export async function POST(req: Request) {
       extraInfo: extraInfo.length ? extraInfo : undefined,
 
       testimonials: Array.isArray(testimonials) && testimonials.length ? testimonials : undefined,
+
+      location: coords ? { _type: "geopoint", lat: coords.lat, lng: coords.lng } : undefined,
 
       heroImage,
       gallery,

@@ -164,7 +164,8 @@ export default function OnboardingPage() {
     watch,
     trigger,
   } = useForm<FormValues>({
-    resolver: zodResolver(schema),
+    // Cast to avoid resolver type mismatch across differing transitive types in IDE
+    resolver: zodResolver(schema) as any,
     defaultValues: {
       country: "France",
       maxGuests: 1,

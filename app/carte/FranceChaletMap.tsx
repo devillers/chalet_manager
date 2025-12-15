@@ -237,7 +237,7 @@ export function FranceChaletMap({ villas }: Props) {
   }, [token, points, prefersReducedMotion, router]);
 
   return (
-    <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-black">
+    <section className="relative overflow-hidden rounded-3xl  bg-black">
       <div ref={containerRef} className="h-[70vh] w-full md:h-[74vh]" />
 
       <div className="pointer-events-none absolute left-4 top-4 rounded-2xl bg-black/45 px-3 py-2 text-xs text-white ring-1 ring-white/10 backdrop-blur">

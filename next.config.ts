@@ -1,23 +1,25 @@
-// next.config.js
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   images: {
+    // Bypass Next.js image optimizer to avoid private-IP resolution issues
+    // in some IPv6/NAT64 environments when fetching remote images.
+    unoptimized: true,
     remotePatterns: [
       {
-        protocol: "https",
-        hostname: "cdn.sanity.io",
-        pathname: "/images/**",
+        protocol: 'https',
+        hostname: 'cdn.sanity.io',
       },
     ],
-    unoptimized: true, // ✅ évite le fetch côté Next => plus d’erreur "private ip"
     dangerouslyAllowSVG: true,
-    formats: ["image/avif", "image/webp"],
+    formats: ['image/avif', 'image/webp'],
   },
   experimental: {
+    // Force le resolver d'images à ignorer les IP privées IPv6
+    allowFutureImage: true,
     serverActions: {
-      bodySizeLimit: "2mb",
+      bodySizeLimit: '2mb',
     },
   },
-};
+}
 
-export default nextConfig;
+export default nextConfig

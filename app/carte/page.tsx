@@ -1,21 +1,74 @@
 // app/carte/page.tsx
 import { client } from "@/sanity/lib/client";
 import { VILLAS_FOR_MAP_QUERY } from "@/sanity/lib/queries";
-import { FranceMapClient } from "./FranceChaletMap";
+import { FranceChaletMap as FranceMapClient } from "./FranceChaletMap";
 import type { VillaMapPoint } from "./type";
 
 export const revalidate = 60;
 
+async function geocodeAddress(query: string): Promise<{ lat: number; lng: number } | null> {
+  try {
+    const token = process.env.MAPBOX_SECRET_TOKEN || process.env.MAPBOX_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+    if (!token || !query.trim()) return null;
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${encodeURIComponent(token)}&limit=1&language=fr`;
+    const res = await fetch(url, { next: { revalidate: 60 * 60 } });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { features?: Array<{ center?: [number, number] }> };
+    const center = data.features?.[0]?.center;
+    if (!center || center.length !== 2) return null;
+    const [lng, lat] = center;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return { lat, lng };
+  } catch {
+    return null;
+  }
+}
+
 export default async function CartePage() {
-  const villas = await client.fetch<VillaMapPoint[]>(VILLAS_FOR_MAP_QUERY);
+  const raw = await client.fetch<any[]>(VILLAS_FOR_MAP_QUERY);
+  // Normalize and geocode when needed
+  const villas: VillaMapPoint[] = [];
+  for (const doc of raw) {
+    const slug = doc?.slug as string | undefined;
+    const name = doc?.name as string | undefined;
+    if (!slug || !name) continue;
+
+    let lat = typeof doc?.lat === "number" ? doc.lat : undefined;
+    let lng = typeof doc?.lng === "number" ? doc.lng : undefined;
+
+    if (!(typeof lat === "number" && typeof lng === "number")) {
+      const address = [doc?.street, doc?.postalCode, doc?.city, doc?.country]
+        .map((x) => (typeof x === "string" ? x.trim() : ""))
+        .filter(Boolean)
+        .join(", ");
+      const coords = address ? await geocodeAddress(address) : null;
+      if (coords) {
+        lat = coords.lat;
+        lng = coords.lng;
+      }
+    }
+
+    if (typeof lat === "number" && typeof lng === "number") {
+      villas.push({
+        _id: String(doc?._id || slug),
+        name,
+        slug,
+        city: typeof doc?.city === "string" ? doc.city : undefined,
+        region: typeof doc?.region === "string" ? doc.region : undefined,
+        country: typeof doc?.country === "string" ? doc.country : undefined,
+        lat,
+        lng,
+      });
+    }
+  }
 
   // Si aucune villa géolocalisée, on peut rendre un état vide minimal
   if (!villas || villas.length === 0) {
     return (
-      <main className="min-h-[calc(100vh-0px)] bg-slate-950">
+      <main className="">
         <div className="mx-auto w-full max-w-[1200px] px-4 py-10">
-          <h1 className="text-2xl font-semibold text-white">Carte interactive</h1>
-          <p className="mt-2 text-sm text-white/70">
+          <h1 className="text-2xl font-semibold text-black">Carte interactive</h1>
+          <p className="mt-2 text-sm text-black/70">
             Aucune villa n’a encore de coordonnées GPS (champ <code className="rounded bg-white/10 px-1">location</code>).
           </p>
         </div>
@@ -24,11 +77,11 @@ export default async function CartePage() {
   }
 
   return (
-    <main className="min-h-[calc(100vh-0px)] bg-slate-950">
+    <main className=" ">
       <div className="mx-auto w-full max-w-[1400px] px-4 py-6">
         <div className="mb-4 flex items-end justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">
+            <h1 className="text-2xl font-thin tracking-tight text-black md:text-3xl">
               Carte interactive
             </h1>
             <p className="mt-1 text-sm text-white/70">

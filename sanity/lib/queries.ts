@@ -6,10 +6,7 @@ import { groq } from "next-sanity";
  */
 export const VILLAS_FOR_MAP_QUERY = groq`
   *[
-    _type == "villa" &&
-    defined(slug.current) &&
-    defined(location.lat) &&
-    defined(location.lng)
+    _type == "villa" && defined(slug.current)
   ] | order(name asc) {
     _id,
     name,
@@ -17,6 +14,9 @@ export const VILLAS_FOR_MAP_QUERY = groq`
     city,
     region,
     country,
+    street,
+    postalCode,
+    // geopoint may be missing; we will geocode from address as fallback
     "lat": location.lat,
     "lng": location.lng
   }
