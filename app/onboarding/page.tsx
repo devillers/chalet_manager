@@ -1,8 +1,13 @@
 // app/onboarding/page.tsx
 "use client";
 
+import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
-import type { InputHTMLAttributes, TextareaHTMLAttributes } from "react";
+import type {
+  InputHTMLAttributes,
+  ReactNode,
+  TextareaHTMLAttributes,
+} from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -24,7 +29,7 @@ function Field({
 }: {
   label: string;
   error?: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div className="space-y-1">
@@ -62,7 +67,6 @@ function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
 }
 
 const schema = z.object({
-  // 11 champs
   ownerName: z.string().min(2, "Nom requis"),
   ownerEmail: z.string().email("Email invalide"),
   ownerPhone: z.string().min(6, "Téléphone requis"),
@@ -82,15 +86,22 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 type PickedImage = { file: File; url: string; name: string; size: number };
 
+type OnboardingResult = {
+  publicUrl?: string;
+  ownerUrl?: string;
+  error?: string;
+};
+
 export default function OnboardingPage() {
   const [step, setStep] = useState<1 | 2>(1);
 
   const [picked, setPicked] = useState<PickedImage[]>([]);
+  const pickedRef = useRef<PickedImage[]>([]);
   const [heroIndex, setHeroIndex] = useState<number>(0);
 
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState("");
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<OnboardingResult | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -114,10 +125,17 @@ export default function OnboardingPage() {
 
   const v = watch();
 
-  // Cleanup blob URLs
+  // Garder une ref à jour pour cleanup unmount
   useEffect(() => {
-    return () => picked.forEach((p) => URL.revokeObjectURL(p.url));
+    pickedRef.current = picked;
   }, [picked]);
+
+  // Cleanup blob URLs au unmount
+  useEffect(() => {
+    return () => {
+      pickedRef.current.forEach((p) => URL.revokeObjectURL(p.url));
+    };
+  }, []);
 
   function openFilePicker() {
     fileInputRef.current?.click();
@@ -130,6 +148,7 @@ export default function OnboardingPage() {
 
     setPicked((prev) => {
       const merged = [...prev];
+
       for (const f of imagesOnly) {
         if (merged.length >= 20) break;
         const exists = merged.some((x) => x.name === f.name && x.size === f.size);
@@ -142,11 +161,16 @@ export default function OnboardingPage() {
           url: URL.createObjectURL(f),
         });
       }
+
+      // Ajuster le hero si besoin (évite l'accès à picked stale)
+      if (prev.length === 0) {
+        setHeroIndex(0);
+      } else {
+        setHeroIndex((h) => Math.min(h, Math.max(0, merged.length - 1)));
+      }
+
       return merged;
     });
-
-    // si aucune image avant, hero=0
-    setHeroIndex((h) => (picked.length === 0 ? 0 : h));
   }
 
   function onFilePick(e: React.ChangeEvent<HTMLInputElement>) {
@@ -157,6 +181,9 @@ export default function OnboardingPage() {
 
   function removeImage(index: number) {
     setPicked((prev) => {
+      const removed = prev[index];
+      if (removed) URL.revokeObjectURL(removed.url);
+
       const next = prev.filter((_, i) => i !== index);
       setHeroIndex((h) => {
         if (next.length === 0) return 0;
@@ -189,12 +216,10 @@ export default function OnboardingPage() {
     try {
       const fd = new FormData();
 
-      // OwnerSite (schema fields)
       fd.append("ownerName", formValues.ownerName);
       fd.append("ownerEmail", formValues.ownerEmail);
       fd.append("ownerPhone", formValues.ownerPhone);
 
-      // Villa (schema fields)
       fd.append("name", formValues.name);
       fd.append("region", formValues.region);
       fd.append("country", formValues.country);
@@ -206,7 +231,6 @@ export default function OnboardingPage() {
       fd.append("shortDescription", formValues.shortDescription);
       fd.append("longDescription", formValues.longDescription);
 
-      // Hero + images (optionnel)
       fd.append("heroIndex", String(heroIndex));
       picked.forEach((p) => fd.append("images", p.file));
 
@@ -215,9 +239,10 @@ export default function OnboardingPage() {
         body: fd,
       });
 
-      const data = await res.json().catch(() => ({}));
+      const data = (await res.json().catch(() => ({}))) as OnboardingResult;
+
       if (!res.ok) {
-        setServerError(data?.error || "Erreur lors de la création.");
+        setServerError(data.error ?? "Erreur lors de la création.");
         return;
       }
 
@@ -298,13 +323,25 @@ export default function OnboardingPage() {
 
                 <div className="grid gap-4 md:grid-cols-3">
                   <Field label="Voyageurs max" error={errors.maxGuests?.message}>
-                    <Input type="number" min={1} {...register("maxGuests", { valueAsNumber: true })} />
+                    <Input
+                      type="number"
+                      min={1}
+                      {...register("maxGuests", { valueAsNumber: true })}
+                    />
                   </Field>
                   <Field label="Chambres" error={errors.bedrooms?.message}>
-                    <Input type="number" min={1} {...register("bedrooms", { valueAsNumber: true })} />
+                    <Input
+                      type="number"
+                      min={1}
+                      {...register("bedrooms", { valueAsNumber: true })}
+                    />
                   </Field>
                   <Field label="Salles de bain" error={errors.bathrooms?.message}>
-                    <Input type="number" min={1} {...register("bathrooms", { valueAsNumber: true })} />
+                    <Input
+                      type="number"
+                      min={1}
+                      {...register("bathrooms", { valueAsNumber: true })}
+                    />
                   </Field>
                 </div>
 
@@ -333,9 +370,21 @@ export default function OnboardingPage() {
 
                   <div
                     onClick={openFilePicker}
-                    onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
-                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
-                    onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false); }}
+                    onDragEnter={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDragOver(true);
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDragOver(true);
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDragOver(false);
+                    }}
                     onDrop={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -367,12 +416,16 @@ export default function OnboardingPage() {
                             key={`${img.name}-${img.size}-${idx}`}
                             className="overflow-hidden rounded-2xl ring-1 ring-slate-100"
                           >
-                            <div className="relative aspect-4/3 bg-slate-50">
-                              <img
+                            <div className="relative aspect-[4/3] bg-slate-50">
+                              <Image
                                 src={img.url}
                                 alt={img.name}
-                                className="h-full w-full object-cover"
+                                fill
+                                unoptimized
+                                sizes="(min-width: 640px) 33vw, 100vw"
+                                className="object-cover"
                               />
+
                               {isHero ? (
                                 <div className="absolute left-3 top-3 rounded-full bg-slate-900 px-3 py-1 text-xs font-medium text-white">
                                   Hero
@@ -434,7 +487,12 @@ export default function OnboardingPage() {
                       {result.publicUrl ? (
                         <p>
                           <span className="font-medium">Fiche publique :</span>{" "}
-                          <a className="underline" href={result.publicUrl} target="_blank" rel="noreferrer">
+                          <a
+                            className="underline"
+                            href={result.publicUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
                             {result.publicUrl}
                           </a>
                         </p>
@@ -442,7 +500,12 @@ export default function OnboardingPage() {
                       {result.ownerUrl ? (
                         <p>
                           <span className="font-medium">Espace owner :</span>{" "}
-                          <a className="underline" href={result.ownerUrl} target="_blank" rel="noreferrer">
+                          <a
+                            className="underline"
+                            href={result.ownerUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
                             {result.ownerUrl}
                           </a>
                         </p>
@@ -468,8 +531,12 @@ export default function OnboardingPage() {
             <p className="mt-2 text-base font-semibold text-slate-900">
               {nonEmpty(v.ownerName) ? v.ownerName : "—"}
             </p>
-            {nonEmpty(v.ownerEmail) ? <p className="mt-1 text-sm text-slate-700">{v.ownerEmail}</p> : null}
-            {nonEmpty(v.ownerPhone) ? <p className="mt-1 text-sm text-slate-700">{v.ownerPhone}</p> : null}
+            {nonEmpty(v.ownerEmail) ? (
+              <p className="mt-1 text-sm text-slate-700">{v.ownerEmail}</p>
+            ) : null}
+            {nonEmpty(v.ownerPhone) ? (
+              <p className="mt-1 text-sm text-slate-700">{v.ownerPhone}</p>
+            ) : null}
           </div>
 
           <div className="mt-4 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-100">
@@ -489,7 +556,9 @@ export default function OnboardingPage() {
             </p>
 
             {nonEmpty(v.shortDescription) ? (
-              <p className="mt-3 text-sm text-slate-700">{clampText(v.shortDescription, 160)}</p>
+              <p className="mt-3 text-sm text-slate-700">
+                {clampText(v.shortDescription, 160)}
+              </p>
             ) : null}
 
             {picked.length ? (

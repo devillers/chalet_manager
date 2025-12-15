@@ -90,6 +90,31 @@ async function uploadImages(
   return assets;
 }
 
+type SanityRef = { _type: "reference"; _ref: string };
+type SanityImage = { _type: "image"; asset: SanityRef; alt?: string };
+type SanityGalleryItem = SanityImage & { _key: string };
+
+type VillaPayload = {
+  _type: "villa";
+  ownerSite: SanityRef;
+  name: string;
+  slug: { _type: "slug"; current: string };
+  region: string;
+  country: string;
+  maxGuests: number;
+  bedrooms: number;
+  bathrooms: number;
+  shortDescription: string;
+  longDescription: string;
+  heroImage?: SanityImage;
+  gallery?: SanityGalleryItem[];
+};
+
+function errorMessage(err: unknown) {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
 export async function GET() {
   return NextResponse.json({ ok: true, route: "/api/owner/onboarding" });
 }
@@ -99,7 +124,7 @@ export async function POST(req: Request) {
     const fd = await req.formData();
     const client = adminClient();
 
-    // 11 champs (inputs)
+    // 11 champs
     const ownerName = s(fd, "ownerName");
     const ownerEmail = s(fd, "ownerEmail");
     const ownerPhone = s(fd, "ownerPhone");
@@ -119,36 +144,58 @@ export async function POST(req: Request) {
     const heroIndex =
       typeof heroIndexRaw === "number" && heroIndexRaw >= 0 ? heroIndexRaw : 0;
 
-    // Validations cohérentes avec tes schemas
-    if (!ownerName) return NextResponse.json({ error: "ownerName requis." }, { status: 400 });
-    if (!ownerEmail) return NextResponse.json({ error: "ownerEmail requis." }, { status: 400 });
+    // validations
+    if (!ownerName)
+      return NextResponse.json({ error: "ownerName requis." }, { status: 400 });
+    if (!ownerEmail)
+      return NextResponse.json({ error: "ownerEmail requis." }, { status: 400 });
 
-    if (!villaName) return NextResponse.json({ error: "name requis." }, { status: 400 });
-    if (!region) return NextResponse.json({ error: "region requis." }, { status: 400 });
-    if (!country) return NextResponse.json({ error: "country requis." }, { status: 400 });
+    if (!villaName)
+      return NextResponse.json({ error: "name requis." }, { status: 400 });
+    if (!region)
+      return NextResponse.json({ error: "region requis." }, { status: 400 });
+    if (!country)
+      return NextResponse.json({ error: "country requis." }, { status: 400 });
 
-    if (!maxGuests || maxGuests < 1) return NextResponse.json({ error: "maxGuests invalide (≥ 1)." }, { status: 400 });
-    if (!bedrooms || bedrooms < 1) return NextResponse.json({ error: "bedrooms invalide (≥ 1)." }, { status: 400 });
-    if (!bathrooms || bathrooms < 1) return NextResponse.json({ error: "bathrooms invalide (≥ 1)." }, { status: 400 });
+    if (maxGuests === undefined || maxGuests < 1)
+      return NextResponse.json(
+        { error: "maxGuests invalide (≥ 1)." },
+        { status: 400 }
+      );
+    if (bedrooms === undefined || bedrooms < 1)
+      return NextResponse.json(
+        { error: "bedrooms invalide (≥ 1)." },
+        { status: 400 }
+      );
+    if (bathrooms === undefined || bathrooms < 1)
+      return NextResponse.json(
+        { error: "bathrooms invalide (≥ 1)." },
+        { status: 400 }
+      );
 
     if (!shortDescription || shortDescription.length < 10)
-      return NextResponse.json({ error: "shortDescription trop courte (≥ 10)." }, { status: 400 });
+      return NextResponse.json(
+        { error: "shortDescription trop courte (≥ 10)." },
+        { status: 400 }
+      );
 
     if (!longDescription || longDescription.length < 50)
-      return NextResponse.json({ error: "longDescription trop courte (≥ 50)." }, { status: 400 });
+      return NextResponse.json(
+        { error: "longDescription trop courte (≥ 50)." },
+        { status: 400 }
+      );
 
     // Images (optionnel)
     const imageFiles = fd
       .getAll("images")
-      .filter((x): x is File => typeof x === "object")
+      .filter((x): x is File => x instanceof File)
       .slice(0, 20);
 
     const assets = imageFiles.length
       ? await uploadImages(client, imageFiles, villaName)
       : [];
 
-    // gallery items AVEC _key (sinon "Missing keys" dans le Studio)
-    const gallery =
+    const gallery: SanityGalleryItem[] | undefined =
       assets.length > 0
         ? assets.map((a, i) => ({
             _key: randomUUID(),
@@ -158,9 +205,8 @@ export async function POST(req: Request) {
           }))
         : undefined;
 
-    // heroImage (optionnel) : index choisi sinon première image
     const heroAsset = assets[heroIndex] || assets[0];
-    const heroImage =
+    const heroImage: SanityImage | undefined =
       heroAsset?._id
         ? {
             _type: "image",
@@ -196,8 +242,9 @@ export async function POST(req: Request) {
         ownerPhone: ownerPhone || undefined,
         slug: { _type: "slug", current: ownerSlug },
         ownerPortalKey,
-        // utile pour ton composant OwnerPortalLink (stable)
-        ownerPortalUrl: `/owner/${ownerSlug}?key=${encodeURIComponent(ownerPortalKey)}`,
+        ownerPortalUrl: `/owner/${ownerSlug}?key=${encodeURIComponent(
+          ownerPortalKey
+        )}`,
       });
 
       ownerSiteId = created._id;
@@ -213,21 +260,26 @@ export async function POST(req: Request) {
           ownerEmail,
           ownerPhone: ownerPhone || undefined,
           ownerPortalKey,
-          ownerPortalUrl: `/owner/${ownerSlug}?key=${encodeURIComponent(ownerPortalKey)}`,
+          ownerPortalUrl: `/owner/${ownerSlug}?key=${encodeURIComponent(
+            ownerPortalKey
+          )}`,
         })
         .commit();
     }
 
-    // 2) create villa (idempotent simple: si même owner + même nom => update)
-    const existingVilla = await client.fetch<{ _id: string } | null>(
-      `*[_type=="villa" && ownerSite._ref==$ownerId && name==$name][0]{_id}`,
+    // 2) villa idempotent simple
+    const existingVilla = await client.fetch<{ _id: string; slug?: string } | null>(
+      `*[_type=="villa" && ownerSite._ref==$ownerId && name==$name][0]{_id, "slug": slug.current}`,
       { ownerId: ownerSiteId, name: villaName }
     );
 
+    // IMPORTANT: si la villa existe, on conserve son slug (évite de casser l’URL)
     const villaSlugBase = slugify(villaName);
-    const villaSlug = await ensureUniqueSlug(client, "villa", villaSlugBase);
+    const villaSlug = existingVilla?.slug
+      ? existingVilla.slug
+      : await ensureUniqueSlug(client, "villa", villaSlugBase);
 
-    const villaPayload: any = {
+    const villaPayload: VillaPayload = {
       _type: "villa",
       ownerSite: { _type: "reference", _ref: ownerSiteId },
 
@@ -261,15 +313,17 @@ export async function POST(req: Request) {
     const origin = req.headers.get("origin") || "";
     return NextResponse.json({
       ok: true,
-      ownerUrl: `${origin}/owner/${ownerSlug}?key=${encodeURIComponent(ownerPortalKey)}`,
+      ownerUrl: `${origin}/owner/${ownerSlug}?key=${encodeURIComponent(
+        ownerPortalKey
+      )}`,
       publicUrl: `${origin}/sites/${villaSlug}`,
       owner: { id: ownerSiteId, slug: ownerSlug },
       villa: { id: villaId, slug: villaSlug },
     });
-  } catch (e: any) {
-    console.error("[onboarding] ERROR", e);
+  } catch (err: unknown) {
+    console.error("[onboarding] ERROR", err);
     return NextResponse.json(
-      { error: "Erreur serveur.", detail: String(e?.message || e) },
+      { error: "Erreur serveur.", detail: errorMessage(err) },
       { status: 500 }
     );
   }

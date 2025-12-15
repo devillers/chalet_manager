@@ -9,6 +9,9 @@ interface ContactSectionProps {
 }
 
 export function ContactSection({ villa }: ContactSectionProps) {
+  const villaName = villa?.name ?? "votre villa";
+  const contactHref = `/contact?villa=${encodeURIComponent(villaName)}&from=contact-section`;
+
   return (
     <section aria-labelledby="contact-humain">
       <div className="space-y-4 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-100">
@@ -16,26 +19,28 @@ export function ContactSection({ villa }: ContactSectionProps) {
           <div className="space-y-1">
             <h2
               id="contact-humain"
-                className="text-2xl font-thin uppercase tracking-[0.15em] text-slate-500 mb-4"
+              className="mb-4 text-2xl font-thin uppercase tracking-[0.15em] text-slate-500"
             >
-              Des questions   ?
+              Des questions ?
             </h2>
             <p className="text-sm italic text-slate-700">
-              Échangez avec un conseiller dédié pour affiner votre séjour, vos dates ou
-              vos envies.
+              Échangez avec un conseiller dédié pour affiner votre séjour à{" "}
+              <span className="font-medium">{villaName}</span>.
             </p>
             <p className="text-xs text-slate-500">
               Disponibles du lundi au samedi, 9h–19h (heure de Paris).
             </p>
           </div>
+
           <div className="flex flex-col items-start gap-2 sm:items-end">
             <Link
-              href="#"
+              href={contactHref}
               className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-[11px] font-medium uppercase tracking-[0.2em] text-white hover:bg-amber-800 transition"
             >
               Planifier un appel
               <ArrowUpRight className="h-3 w-3" />
             </Link>
+
             <Link
               href="tel:+33400000000"
               className="inline-flex items-center gap-1 text-xs font-medium uppercase tracking-[0.2em] text-slate-700 hover:text-amber-800"

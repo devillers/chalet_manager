@@ -1,53 +1,65 @@
 // app/sites/_components/AvailabilityCalendarMini.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { DayPicker } from "react-day-picker";
 import { fr } from "date-fns/locale";
-import { parseISO, startOfDay } from "date-fns";
+import { parseISO, startOfDay, isValid } from "date-fns";
 import { CalendarDays, ChevronDown } from "lucide-react";
 import type { BlockedRange } from "../lib/getBlockedRangesFromIcal";
 
+type Props = {
+  blockedRanges: BlockedRange[];
+  subscribePath?: string;
+  downloadPath?: string;
+  defaultOpen?: boolean;
+};
+
 export function AvailabilityCalendarMini({
   blockedRanges,
-  subscribePath,
-  downloadPath,
+  subscribePath = "",
+  downloadPath = "",
   defaultOpen = false,
-}: {
-  blockedRanges: BlockedRange[];
-  subscribePath: string;
-  downloadPath: string;
-  defaultOpen?: boolean;
-}) {
+}: Props) {
   const disabled = useMemo(() => {
     const safe = Array.isArray(blockedRanges) ? blockedRanges : [];
     return safe
       .filter((r) => r?.from && r?.to)
-      .map((r) => ({
-        from: startOfDay(parseISO(r.from)),
-        to: startOfDay(parseISO(r.to)),
-      }));
+      .map((r) => {
+        const from = startOfDay(parseISO(r.from));
+        const to = startOfDay(parseISO(r.to));
+        if (!isValid(from) || !isValid(to)) return null;
+        return { from, to };
+      })
+      .filter((x): x is { from: Date; to: Date } => !!x);
   }, [blockedRanges]);
 
   const hasSync = disabled.length > 0;
 
-  // Hydration-safe
-  const [webcalHref, setWebcalHref] = useState<string>(subscribePath);
-
-  useEffect(() => {
-    if (!subscribePath) return;
-
+  // ✅ pas de setState dans un effect (rule react.dev)
+  const webcalHref = useMemo(() => {
+    if (!subscribePath) return "";
     try {
-      const url = new URL(subscribePath, window.location.origin);
-      setWebcalHref(url.toString().replace(/^https?:\/\//, "webcal://"));
+      // si subscribePath est absolu
+      if (/^https?:\/\//.test(subscribePath)) {
+        return subscribePath.replace(/^https?:\/\//, "webcal://");
+      }
+
+      // si relative et qu'on a une base stable (recommandé)
+      const base =
+        process.env.NEXT_PUBLIC_SITE_URL ||
+        (typeof window !== "undefined" ? window.location.origin : "");
+
+      if (!base) return subscribePath;
+
+      const url = new URL(subscribePath, base);
+      return url.toString().replace(/^https?:\/\//, "webcal://");
     } catch {
-      setWebcalHref(subscribePath);
+      return subscribePath;
     }
   }, [subscribePath]);
 
-  // ✅ Ne jamais disparaître : si pas de sync, on affiche quand même le calendrier.
-  if (!subscribePath) return null;
-
+  // ✅ Ne pas retourner null : on affiche le calendrier même sans iCal
   return (
     <details
       className="group rounded-2xl bg-white shadow-sm ring-1 ring-slate-100"
@@ -78,14 +90,14 @@ export function AvailabilityCalendarMini({
             disabled={disabled}
             classNames={{
               month: "w-full",
-              caption: "flex items-center justify-between mb-2",
+              caption: "mb-2 flex items-center justify-between",
               caption_label: "text-xs font-semibold text-slate-900",
               nav: "flex items-center gap-1",
               nav_button:
-                "h-8 w-8 rounded-xl ring-1 ring-slate-200 bg-white hover:bg-slate-50",
+                "h-8 w-8 rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-50",
               table: "w-full border-collapse",
               head_cell:
-                "text-[10px] font-medium uppercase tracking-wider text-slate-500 py-1",
+                "py-1 text-[10px] font-medium uppercase tracking-wider text-slate-500",
               cell: "p-0.5",
               day: "h-8 w-8 rounded-xl text-xs font-medium hover:bg-slate-100",
               day_today: "ring-1 ring-slate-300",
@@ -95,21 +107,27 @@ export function AvailabilityCalendarMini({
           />
         </div>
 
-        {/* Optionnel (à activer si tu veux) */}
-        {/* <div className="mt-3 flex gap-2">
-          <a
-            href={webcalHref}
-            className="flex-1 rounded-2xl bg-slate-900 px-3 py-2 text-center text-xs font-medium text-white hover:bg-slate-800"
-          >
-            S’abonner
-          </a>
-          <a
-            href={downloadPath}
-            className="flex-1 rounded-2xl bg-white px-3 py-2 text-center text-xs font-medium text-slate-900 ring-1 ring-slate-200 hover:bg-slate-50"
-          >
-            .ics
-          </a>
-        </div> */}
+        {/* Actions visibles seulement si on a des URLs */}
+        {(webcalHref || downloadPath) && (
+          <div className="mt-3 flex gap-2">
+            {webcalHref && (
+              <a
+                href={webcalHref}
+                className="flex-1 rounded-2xl bg-slate-900 px-3 py-2 text-center text-xs font-medium text-white hover:bg-slate-800"
+              >
+                S’abonner
+              </a>
+            )}
+            {downloadPath && (
+              <a
+                href={downloadPath}
+                className="flex-1 rounded-2xl bg-white px-3 py-2 text-center text-xs font-medium text-slate-900 ring-1 ring-slate-200 hover:bg-slate-50"
+              >
+                .ics
+              </a>
+            )}
+          </div>
+        )}
       </div>
     </details>
   );
