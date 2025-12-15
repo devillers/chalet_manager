@@ -11,6 +11,7 @@ import type {
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { Flame, Waves, Dumbbell, Wind, Snowflake, Sparkles, Wifi, Car, Mountain } from "lucide-react";
 
 function clampText(txt: string, max = 220) {
   const s = String(txt || "").trim();
@@ -109,10 +110,9 @@ const schema = z
     environmentType: z.string().max(200, "Trop long").optional(),
     distancesText: z.string().max(1200, "Trop long").optional(),
 
-    // Textareas multi-lignes pour listes
+    // Textareas multi-lignes pour listes (avec choix + saisie libre)
     quickHighlightsText: z.string().max(800, "Trop long").optional(),
     keyAmenitiesText: z.string().max(1200, "Trop long").optional(),
-    similarVillasText: z.string().max(800, "Trop long").optional(),
 
     // Blocs d'info
     goodToKnowText: z.string().max(1200, "Trop long").optional(),
@@ -120,8 +120,7 @@ const schema = z
     conciergePointsText: z.string().max(1200, "Trop long").optional(),
     extraInfoText: z.string().max(1200, "Trop long").optional(),
 
-    // Témoignages (1 par ligne: nom | date | note | texte)
-    testimonialsText: z.string().max(4000, "Trop long").optional(),
+    // (Similars/testimonials: gérés en Studio)
   })
   .superRefine((values, ctx) => {
     // Prix max ≥ prix min si présent
@@ -163,6 +162,7 @@ export default function OnboardingPage() {
     formState: { errors },
     watch,
     trigger,
+    setValue,
   } = useForm<FormValues>({
     // Cast to avoid resolver type mismatch across differing transitive types in IDE
     resolver: zodResolver(schema) as any,
@@ -177,6 +177,37 @@ export default function OnboardingPage() {
   });
 
   const v = watch();
+
+  // Suggestions pré-remplies pour aider la saisie
+  const suggestedQuickHighlights = [
+    "Vue panoramique",
+    "Cheminée",
+    "Spa extérieur",
+    "Piscine chauffée",
+    "Accès pistes"
+  ];
+
+  const suggestedAmenities = [
+    "Wi-Fi haut débit",
+    "Parking privé",
+    "Sauna",
+    "Salle de sport",
+    "Climatisation"
+  ];
+
+  const suggestedGoodToKnow = [
+    "Check-in 16h / Check-out 10h",
+    "Animaux sur demande",
+    "Non fumeur",
+    "Caution demandée"
+  ];
+
+  const suggestedConcierge = [
+    "Chef à domicile",
+    "Transferts privés",
+    "Location de ski",
+    "Cours de ski"
+  ];
 
   // Garder une ref à jour pour cleanup unmount
   useEffect(() => {
@@ -493,11 +524,80 @@ export default function OnboardingPage() {
 
                 {/* Incontournables & Équipements (amenities) */}
                 <div className="grid gap-4 md:grid-cols-2">
-                  <Field label="Incontournables (1 par ligne)">
-                    <Textarea rows={4} placeholder="Vue lac\nCheminée\nSpa extérieur" {...register("quickHighlightsText")} />
+                  <Field label="Incontournables (ajoute ou coche)">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        {suggestedQuickHighlights.map((item) => (
+                          <label key={item} className="inline-flex items-center gap-2 rounded-full bg-slate-50 px-3 py-1 text-xs text-slate-700 ring-1 ring-slate-200">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-slate-900"
+                              onChange={(e) => {
+                                const current = splitLines(v.quickHighlightsText || "");
+                                if (e.target.checked) {
+                                  if (!current.includes(item)) setValue("quickHighlightsText", [...current, item].join("\n"));
+                                } else {
+                                  setValue(
+                                    "quickHighlightsText",
+                                    current.filter((x) => x !== item).join("\n")
+                                  );
+                                }
+                              }}
+                              checked={splitLines(v.quickHighlightsText || "").includes(item)}
+                            />
+                            {item}
+                          </label>
+                        ))}
+                      </div>
+                      <Textarea
+                        rows={4}
+                        placeholder="Ajoute tes incontournables (1 par ligne)"
+                        {...register("quickHighlightsText")}
+                      />
+                      <p className="text-[11px] text-slate-500">Combine la sélection ci-dessus et tes propres idées.</p>
+                    </div>
                   </Field>
-                  <Field label="Équipements / amenities (1 par ligne)">
-                    <Textarea rows={4} placeholder="Piscine chauffée\nSauna\nSalle de sport" {...register("keyAmenitiesText")} />
+
+                  <Field label="Équipements / amenities (coche + ajoute)">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        {suggestedAmenities.map((item) => (
+                          <label key={item} className="inline-flex items-center gap-2 rounded-full bg-slate-50 px-3 py-1 text-xs text-slate-700 ring-1 ring-slate-200">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-slate-900"
+                              onChange={(e) => {
+                                const current = splitLines(v.keyAmenitiesText || "");
+                                if (e.target.checked) {
+                                  if (!current.includes(item)) setValue("keyAmenitiesText", [...current, item].join("\n"));
+                                } else {
+                                  setValue(
+                                    "keyAmenitiesText",
+                                    current.filter((x) => x !== item).join("\n")
+                                  );
+                                }
+                              }}
+                              checked={splitLines(v.keyAmenitiesText || "").includes(item)}
+                            />
+                            <span className="inline-flex items-center gap-1">
+                              {item === "Sauna" && <Flame className="h-3 w-3 text-amber-600" />}
+                              {item === "Piscine chauffée" && <Waves className="h-3 w-3 text-cyan-600" />}
+                              {item === "Salle de sport" && <Dumbbell className="h-3 w-3 text-slate-700" />}
+                              {item === "Climatisation" && <Wind className="h-3 w-3 text-sky-600" />}
+                              {item === "Wi-Fi haut débit" && <Wifi className="h-3 w-3 text-emerald-600" />}
+                              {item === "Parking privé" && <Car className="h-3 w-3 text-slate-700" />}
+                              <span>{item}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                      <Textarea
+                        rows={4}
+                        placeholder="Ajoute tes équipements (1 par ligne)"
+                        {...register("keyAmenitiesText")}
+                      />
+                      <p className="text-[11px] text-slate-500">Ajoute ce qui n'est pas dans la liste ou supprime ce qui ne s'applique pas.</p>
+                    </div>
                   </Field>
                 </div>
 
@@ -512,24 +612,104 @@ export default function OnboardingPage() {
                   <Field label="Type d'environnement">
                     <Input placeholder="Village authentique, au bord du lac, au pied des pistes..." {...register("environmentType")} />
                   </Field>
-                  <Field label="Distances (1 par ligne: libellé | durée | car/walk/boat)">
-                    <Textarea rows={3} placeholder="Supermarché | 5 min | car\nPistes | 10 min | walk" {...register("distancesText")} />
+                  <Field label="Distances (coche + ajoute)">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        {["Pistes | 10 min | walk", "Supermarché | 5 min | car", "Port | 15 min | boat", "Gare | 20 min | car"].map((d) => (
+                          <label key={d} className="inline-flex items-center gap-2 rounded-full bg-slate-50 px-3 py-1 text-xs text-slate-700 ring-1 ring-slate-200">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-slate-900"
+                              onChange={(e) => {
+                                const current = splitLines(v.distancesText || "");
+                                if (e.target.checked) {
+                                  if (!current.includes(d)) setValue("distancesText", [...current, d].join("\n"));
+                                } else {
+                                  setValue(
+                                    "distancesText",
+                                    current.filter((x) => x !== d).join("\n")
+                                  );
+                                }
+                              }}
+                              checked={splitLines(v.distancesText || "").includes(d)}
+                            />
+                            {d}
+                          </label>
+                        ))}
+                      </div>
+                      <Textarea
+                        rows={3}
+                        placeholder="Ajoute tes distances (1 par ligne: libellé | durée | car/walk/boat)"
+                        {...register("distancesText")}
+                      />
+                      <p className="text-[11px] text-slate-500">Format: Lieu | durée | moyen (car / walk / boat). Ex: "Plage | 8 min | walk".</p>
+                    </div>
                   </Field>
                 </div>
 
                 {/* Blocs d'info */}
                 <div className="space-y-4 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-100">
                   <p className="text-sm font-medium text-slate-800">Informations & conciergerie</p>
-                  <Field label="Bon à savoir (1 par ligne)">
-                    <Textarea rows={3} placeholder="Caution demandée\nCheck-in 16h\nNon fumeur" {...register("goodToKnowText")} />
+                  <Field label="Bon à savoir (coche + ajoute)">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        {suggestedGoodToKnow.map((item) => (
+                          <label key={item} className="inline-flex items-center gap-2 rounded-full bg-slate-50 px-3 py-1 text-xs text-slate-700 ring-1 ring-slate-200">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-slate-900"
+                              onChange={(e) => {
+                                const current = splitLines(v.goodToKnowText || "");
+                                if (e.target.checked) {
+                                  if (!current.includes(item)) setValue("goodToKnowText", [...current, item].join("\n"));
+                                } else {
+                                  setValue(
+                                    "goodToKnowText",
+                                    current.filter((x) => x !== item).join("\n")
+                                  );
+                                }
+                              }}
+                              checked={splitLines(v.goodToKnowText || "").includes(item)}
+                            />
+                            {item}
+                          </label>
+                        ))}
+                      </div>
+                      <Textarea rows={3} placeholder="Ajoute tes infos (1 par ligne)" {...register("goodToKnowText")} />
+                    </div>
                   </Field>
                   <Field label="Sous-titre conciergerie">
                     <Input placeholder="Nos équipes organisent vos activités…" {...register("conciergeSubtitle")} />
                   </Field>
-                  <Field label="Points conciergerie (1 par ligne)">
-                    <Textarea rows={3} placeholder="Chef à domicile\nLocation de ski\nTransferts privés" {...register("conciergePointsText")} />
+                  <Field label="Points conciergerie (coche + ajoute)">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        {suggestedConcierge.map((item) => (
+                          <label key={item} className="inline-flex items-center gap-2 rounded-full bg-slate-50 px-3 py-1 text-xs text-slate-700 ring-1 ring-slate-200">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-slate-900"
+                              onChange={(e) => {
+                                const current = splitLines(v.conciergePointsText || "");
+                                if (e.target.checked) {
+                                  if (!current.includes(item)) setValue("conciergePointsText", [...current, item].join("\n"));
+                                } else {
+                                  setValue(
+                                    "conciergePointsText",
+                                    current.filter((x) => x !== item).join("\n")
+                                  );
+                                }
+                              }}
+                              checked={splitLines(v.conciergePointsText || "").includes(item)}
+                            />
+                            {item}
+                          </label>
+                        ))}
+                      </div>
+                      <Textarea rows={3} placeholder="Ajoute tes points conciergerie (1 par ligne)" {...register("conciergePointsText")} />
+                    </div>
                   </Field>
-                  <Field label="Informations supplémentaires (1 par ligne)">
+                  <Field label="Informations supplémentaires (ajoute)">
                     <Textarea rows={3} placeholder="Animaux sur demande\nAccessible PMR (partiellement)" {...register("extraInfoText")} />
                   </Field>
                 </div>

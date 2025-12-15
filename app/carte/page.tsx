@@ -65,23 +65,25 @@ export default async function CartePage() {
   // Si aucune villa géolocalisée, on peut rendre un état vide minimal
   if (!villas || villas.length === 0) {
     return (
-      <main className="">
-        <div className="mx-auto w-full max-w-[1200px] px-4 py-10">
-          <h1 className="text-2xl font-semibold text-black">Carte interactive</h1>
-          <p className="mt-2 text-sm text-black/70">
-            Aucune villa n’a encore de coordonnées GPS (champ <code className="rounded bg-white/10 px-1">location</code>).
-          </p>
+      <main className="min-h-screen bg-slate-950">
+        <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col px-4 py-8">
+          <div className="mb-6">
+            <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">Carte interactive</h1>
+            <p className="mt-2 text-sm text-white/70">
+              Aucune villa n’a encore de coordonnées GPS (champ <code className="rounded bg-white/10 px-1">location</code>).
+            </p>
+          </div>
         </div>
       </main>
     );
   }
 
   return (
-    <main className=" ">
-      <div className="mx-auto w-full max-w-[1400px] px-4 py-6">
-        <div className="mb-4 flex items-end justify-between gap-4">
+    <main className="min-h-screen bg-slate-950">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col px-4 py-6">
+        <div className="mb-6 flex items-end justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-thin tracking-tight text-black md:text-3xl">
+            <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">
               Carte interactive
             </h1>
             <p className="mt-1 text-sm text-white/70">
@@ -93,7 +95,9 @@ export default async function CartePage() {
           </div>
         </div>
 
-        <FranceMapClient villas={villas} />
+        <div className="flex-1 pb-4">
+          <FranceMapClient villas={villas} />
+        </div>
       </div>
     </main>
   );
