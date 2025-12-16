@@ -65,8 +65,8 @@ function formatDate(input?: string) {
   return d.toLocaleDateString("fr-FR", { year: "numeric", month: "short", day: "numeric" });
 }
 
-export default async function BlogPage(props: { searchParams?: Promise<{ category?: string }> | { category?: string } }) {
-  const params = await Promise.resolve(props.searchParams || {});
+export default async function BlogPage({ searchParams }: { searchParams?: Promise<{ category?: string }> }) {
+  const params = await (searchParams ?? Promise.resolve<{ category?: string }>({}));
   const activeCategory = params.category || "";
 
   const [categories, posts] = await Promise.all([
@@ -139,56 +139,78 @@ export default async function BlogPage(props: { searchParams?: Promise<{ categor
           ))}
         </div>
 
-        {/* Grille d’articles */}
-        <div className="mt-8 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {posts.map((post) => (
-            <article
-              key={post.id}
-              className="flex h-full flex-col justify-between overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-100 transition hover:-translate-y-1 hover:shadow-lg"
-            >
-              {post.coverImage?.url ? (
-                <div className="relative w-full overflow-hidden">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={post.coverImage.url}
-                    alt={post.coverImage.alt || post.title}
-                    className="h-full w-full object-cover"
-                    loading="lazy"
-                  />
-                </div>
-              ) : null}
+        {/* Grille d’articles façon patchwork, avec espaces blancs pour aérer */}
+	        <div className="mt-8 grid auto-rows-[1fr] gap-6 sm:grid-cols-12">
+	          {posts.map((post, index) => {
+	            const span =
+	              index % 5 === 0
+	                ? "sm:col-span-12 md:col-span-8"
+                : index % 5 === 1
+                  ? "sm:col-span-12 md:col-span-4"
+                  : index % 4 === 0
+	                    ? "sm:col-span-12 md:col-span-6 lg:col-span-5"
+	                    : "sm:col-span-12 md:col-span-6 lg:col-span-4";
 
-              <div className="flex flex-1 flex-col justify-between p-5">
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.18em] text-slate-500">
-                    <span>{post.category?.title ?? ""}</span>
-                    <span className="text-slate-400 text-[9px]">{formatDate(post.publishedAt)}</span>
-                  </div>
-                  <h2 className="text-lg font-thin uppercase text-slate-900">{post.title}</h2>
-                  <p className="text-[13px] leading-relaxed text-justify text-slate-600">{post.excerpt}</p>
-                  {post.tags && post.tags.length ? (
-                    <div className="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                      {post.tags.map((tag) => (
-                        <span key={tag} className="rounded-full bg-slate-100 px-2 py-1 ring-1 ring-slate-200">
-                          {tag}
-                        </span>
-                      ))}
+	            const cover = post.coverImage;
+	            const coverUrl = cover?.url;
+	            const coverAlt = cover?.alt || post.title;
+	            const hasImage = Boolean(coverUrl) && index % 2 === 0;
+	            const titleClass = hasImage
+	              ? "text-xl font-semibold leading-tight text-slate-900"
+	              : "text-2xl font-semibold leading-tight text-slate-900";
+
+            return (
+              <article
+                key={post.id}
+                className={`flex h-full flex-col justify-between overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-100 transition hover:-translate-y-1 hover:shadow-lg ${span}`}
+              >
+	                {hasImage && coverUrl ? (
+	                  <div className="relative w-full overflow-hidden">
+	                    {/* eslint-disable-next-line @next/next/no-img-element */}
+	                    <img
+	                      src={coverUrl}
+	                      alt={coverAlt}
+	                      className="h-full w-full object-cover"
+	                      loading="lazy"
+	                    />
+	                  </div>
+	                ) : null}
+
+                <div className="flex flex-1 flex-col justify-between p-5">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.18em] text-slate-500">
+                      <span>{post.category?.title ?? ""}</span>
+                      <span className="text-slate-400 text-[9px]">{formatDate(post.publishedAt)}</span>
                     </div>
-                  ) : null}
-                </div>
+                    <h2 className={titleClass}>{post.title}</h2>
+                    <p className="text-sm leading-relaxed text-slate-600">{post.excerpt}</p>
+                    {post.tags && post.tags.length ? (
+                      <div className="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                        {post.tags.map((tag) => (
+                          <span key={tag} className="rounded-full bg-slate-100 px-2 py-1 ring-1 ring-slate-200">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
 
-                <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
-                  <span>{post.readingTime || ""}</span>
-                  <Link
-                    href={`/blog/${post.slug}`}
-                    className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-700 hover:text-amber-800"
-                  >
-                    Lire l’article
-                  </Link>
+                  <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                    <span>{post.readingTime || ""}</span>
+                    <Link
+                      href={`/blog/${post.slug}`}
+                      className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-700 hover:text-amber-800"
+                    >
+                      Lire l’article
+                    </Link>
+                  </div>
                 </div>
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
+          {/* Cases blanches pour aérer le patchwork */}
+          <div className="hidden sm:block sm:col-span-6 lg:col-span-4 rounded-2xl border border-dashed border-slate-200 bg-white/60" />
+          <div className="hidden lg:block lg:col-span-3 rounded-2xl border border-dashed border-slate-200 bg-white/60" />
           {posts.length === 0 ? (
             <div className="rounded-2xl bg-white p-6 text-sm text-slate-600 ring-1 ring-slate-100">
               Aucun article dans cette catégorie pour le moment.

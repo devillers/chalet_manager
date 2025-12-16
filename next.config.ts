@@ -14,8 +14,6 @@ const nextConfig = {
     formats: ['image/avif', 'image/webp'],
   },
   experimental: {
-    // Force le resolver d'images à ignorer les IP privées IPv6
-    allowFutureImage: true,
     serverActions: {
       bodySizeLimit: '2mb',
     },

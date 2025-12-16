@@ -4,13 +4,53 @@ import { VILLAS_FOR_MAP_QUERY } from "@/sanity/lib/queries";
 import { FranceChaletMap as FranceMapClient } from "./FranceChaletMap";
 import type { VillaMapPoint } from "./type";
 
-export const revalidate = 60;
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+const FRANCE_BOUNDS = {
+  west: -5.5,
+  south: 41.0,
+  east: 10.0,
+  north: 51.5,
+} as const;
+
+function isValidLngLat(lat: unknown, lng: unknown) {
+  if (typeof lat !== "number" || typeof lng !== "number") return null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  return { lat, lng };
+}
+
+function isWithinFranceBounds(lat: number, lng: number) {
+  return (
+    lng >= FRANCE_BOUNDS.west &&
+    lng <= FRANCE_BOUNDS.east &&
+    lat >= FRANCE_BOUNDS.south &&
+    lat <= FRANCE_BOUNDS.north
+  );
+}
+
+type VillaForMapDoc = {
+  _id?: string;
+  name?: string;
+  slug?: string;
+  city?: string;
+  region?: string;
+  country?: string;
+  street?: string;
+  postalCode?: string;
+  lat?: number;
+  lng?: number;
+};
 
 async function geocodeAddress(query: string): Promise<{ lat: number; lng: number } | null> {
   try {
     const token = process.env.MAPBOX_SECRET_TOKEN || process.env.MAPBOX_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
     if (!token || !query.trim()) return null;
-    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${encodeURIComponent(token)}&limit=1&language=fr`;
+    const url =
+      `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json` +
+      `?access_token=${encodeURIComponent(token)}` +
+      `&limit=1&language=fr&country=fr&types=address`;
     const res = await fetch(url, { next: { revalidate: 60 * 60 } });
     if (!res.ok) return null;
     const data = (await res.json()) as { features?: Array<{ center?: [number, number] }> };
@@ -25,30 +65,42 @@ async function geocodeAddress(query: string): Promise<{ lat: number; lng: number
 }
 
 export default async function CartePage() {
-  const raw = await client.fetch<any[]>(VILLAS_FOR_MAP_QUERY);
+  const raw = await client.fetch<VillaForMapDoc[]>(VILLAS_FOR_MAP_QUERY);
   // Normalize and geocode when needed
+  const geocodeCache = new Map<string, Promise<{ lat: number; lng: number } | null>>();
+
+  async function getGeocodedCoords(address: string) {
+    const key = address.trim().toLowerCase();
+    if (!key) return null;
+    const existing = geocodeCache.get(key);
+    if (existing) return existing;
+    const pending = geocodeAddress(address);
+    geocodeCache.set(key, pending);
+    return pending;
+  }
+
   const villas: VillaMapPoint[] = [];
   for (const doc of raw) {
     const slug = doc?.slug as string | undefined;
     const name = doc?.name as string | undefined;
     if (!slug || !name) continue;
 
-    let lat = typeof doc?.lat === "number" ? doc.lat : undefined;
-    let lng = typeof doc?.lng === "number" ? doc.lng : undefined;
+    const address = [doc?.street, doc?.postalCode, doc?.city, doc?.region, doc?.country]
+      .map((x) => (typeof x === "string" ? x.trim() : typeof x === "number" ? String(x) : ""))
+      .filter(Boolean)
+      .join(", ");
 
-    if (!(typeof lat === "number" && typeof lng === "number")) {
-      const address = [doc?.street, doc?.postalCode, doc?.city, doc?.country]
-        .map((x) => (typeof x === "string" ? x.trim() : ""))
-        .filter(Boolean)
-        .join(", ");
-      const coords = address ? await geocodeAddress(address) : null;
-      if (coords) {
-        lat = coords.lat;
-        lng = coords.lng;
-      }
-    }
+    const storedCoords = isValidLngLat(doc?.lat, doc?.lng);
+    const geocoded = address ? await getGeocodedCoords(address) : null;
 
-    if (typeof lat === "number" && typeof lng === "number") {
+    const chosen =
+      geocoded && isWithinFranceBounds(geocoded.lat, geocoded.lng)
+        ? geocoded
+        : storedCoords && isWithinFranceBounds(storedCoords.lat, storedCoords.lng)
+          ? storedCoords
+          : null;
+
+    if (chosen) {
       villas.push({
         _id: String(doc?._id || slug),
         name,
@@ -56,8 +108,8 @@ export default async function CartePage() {
         city: typeof doc?.city === "string" ? doc.city : undefined,
         region: typeof doc?.region === "string" ? doc.region : undefined,
         country: typeof doc?.country === "string" ? doc.country : undefined,
-        lat,
-        lng,
+        lat: chosen.lat,
+        lng: chosen.lng,
       });
     }
   }

@@ -28,12 +28,13 @@ async function getOwnerSite(ownerSlug: string): Promise<OwnerSite | null> {
   return client.fetch<OwnerSite | null>(query, {slug: ownerSlug})
 }
 
-export default async function OwnerDashboardPage(props: {
-  params: {ownerSlug: string} | Promise<{ownerSlug: string}>
+export default async function OwnerDashboardPage({
+  params,
+}: {
+  params: Promise<{ownerSlug: string}>
 }) {
-  // ✅ on “unwrap” params
-  const params = await Promise.resolve(props.params)
-  const site = await getOwnerSite(params.ownerSlug)
+  const {ownerSlug} = await params
+  const site = await getOwnerSite(ownerSlug)
 
   if (!site) {
     notFound()

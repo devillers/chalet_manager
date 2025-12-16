@@ -49,9 +49,9 @@ export async function generateStaticParams() {
 export async function generateMetadata({
   params,
 }: {
-  params: Params | Promise<Params>;
+  params: Promise<Params>;
 }): Promise<Metadata> {
-  const resolved = await Promise.resolve(params);
+  const resolved = await params;
   const data = await client.fetch<BlogPost | null>(POST_QUERY, { slug: resolved.slug });
   if (!data) return { title: "Article non trouvé" };
   return {
@@ -60,7 +60,7 @@ export async function generateMetadata({
     openGraph: {
       title: data.title,
       description: data.excerpt,
-      url: `/blog/${params.slug}`,
+      url: `/blog/${resolved.slug}`,
       type: "article",
       images: data.coverImage?.url ? [{ url: data.coverImage.url, alt: data.coverImage?.alt || data.title }] : undefined,
     },
@@ -71,9 +71,9 @@ export async function generateMetadata({
 export default async function BlogPostPage({
   params,
 }: {
-  params: Params | Promise<Params>;
+  params: Promise<Params>;
 }) {
-  const resolved = await Promise.resolve(params);
+  const resolved = await params;
   const data = await client.fetch<BlogPost | null>(POST_QUERY, { slug: resolved.slug });
   if (!data) {
     return (

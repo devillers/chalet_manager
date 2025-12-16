@@ -4,12 +4,6 @@ export const blogPost = defineType({
   name: "blogPost",
   title: "Article (Blog)",
   type: "document",
-  // Autoriser uniquement les admins à créer/mettre à jour/supprimer
-  access: {
-    create: ({ currentUser }) => currentUser?.roles?.some((r) => r.name === "administrator") ?? false,
-    update: ({ currentUser }) => currentUser?.roles?.some((r) => r.name === "administrator") ?? false,
-    delete: ({ currentUser }) => currentUser?.roles?.some((r) => r.name === "administrator") ?? false,
-  },
   fields: [
     defineField({
       name: "title",

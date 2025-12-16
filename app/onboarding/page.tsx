@@ -8,10 +8,10 @@ import type {
   ReactNode,
   TextareaHTMLAttributes,
 } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Flame, Waves, Dumbbell, Wind, Snowflake, Sparkles, Wifi, Car, Mountain } from "lucide-react";
+import { Flame, Waves, Dumbbell, Wind, Wifi, Car } from "lucide-react";
 
 function clampText(txt: string, max = 220) {
   const s = String(txt || "").trim();
@@ -165,7 +165,7 @@ export default function OnboardingPage() {
     setValue,
   } = useForm<FormValues>({
     // Cast to avoid resolver type mismatch across differing transitive types in IDE
-    resolver: zodResolver(schema) as any,
+    resolver: zodResolver(schema) as unknown as Resolver<FormValues>,
     defaultValues: {
       country: "France",
       maxGuests: 1,
@@ -331,10 +331,8 @@ export default function OnboardingPage() {
       // Listes multi-lignes
       const quickHighlights = splitLines(formValues.quickHighlightsText || "");
       const keyAmenities = splitLines(formValues.keyAmenitiesText || "");
-      const similarVillas = splitLines(formValues.similarVillasText || "");
       fd.append("quickHighlights", JSON.stringify(quickHighlights));
       fd.append("keyAmenities", JSON.stringify(keyAmenities));
-      fd.append("similarVillas", JSON.stringify(similarVillas));
 
       // Environs
       if (formValues.surroundingsIntro) fd.append("surroundingsIntro", formValues.surroundingsIntro);
@@ -349,25 +347,6 @@ export default function OnboardingPage() {
       fd.append("goodToKnow", JSON.stringify(goodToKnow));
       fd.append("conciergePoints", JSON.stringify(conciergePoints));
       fd.append("extraInfo", JSON.stringify(extraInfo));
-
-      // Témoignages (nom | date | note | texte)
-      if (formValues.testimonialsText) {
-        const testimonials = splitLines(formValues.testimonialsText)
-          .map((line) => {
-            const parts = line.split("|").map((s) => s.trim());
-            if (parts.length < 4) return null;
-            const [name, date, ratingStr, text] = parts;
-            const rating = Number(ratingStr);
-            return {
-              name,
-              date,
-              text,
-              rating: Number.isFinite(rating) ? Math.max(0, Math.min(5, rating)) : undefined,
-            };
-          })
-          .filter((t) => t && t.name && t.text);
-        fd.append("testimonials", JSON.stringify(testimonials));
-      }
 
       fd.append("heroIndex", String(heroIndex));
       picked.forEach((p) => fd.append("images", p.file));
@@ -596,7 +575,9 @@ export default function OnboardingPage() {
                         placeholder="Ajoute tes équipements (1 par ligne)"
                         {...register("keyAmenitiesText")}
                       />
-                      <p className="text-[11px] text-slate-500">Ajoute ce qui n'est pas dans la liste ou supprime ce qui ne s'applique pas.</p>
+                      <p className="text-[11px] text-slate-500">
+                        {"Ajoute ce qui n'est pas dans la liste ou supprime ce qui ne s'applique pas."}
+                      </p>
                     </div>
                   </Field>
                 </div>
@@ -642,7 +623,9 @@ export default function OnboardingPage() {
                         placeholder="Ajoute tes distances (1 par ligne: libellé | durée | car/walk/boat)"
                         {...register("distancesText")}
                       />
-                      <p className="text-[11px] text-slate-500">Format: Lieu | durée | moyen (car / walk / boat). Ex: "Plage | 8 min | walk".</p>
+                      <p className="text-[11px] text-slate-500">
+                        {"Format: Lieu | durée | moyen (car / walk / boat). Ex: “Plage | 8 min | walk”."}
+                      </p>
                     </div>
                   </Field>
                 </div>
@@ -713,19 +696,6 @@ export default function OnboardingPage() {
                     <Textarea rows={3} placeholder="Animaux sur demande\nAccessible PMR (partiellement)" {...register("extraInfoText")} />
                   </Field>
                 </div>
-
-                {/* Témoignages */}
-                <div className="space-y-4 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-100">
-                  <p className="text-sm font-medium text-slate-800">Témoignages</p>
-                  <Field label="1 par ligne: nom | date | note | texte">
-                    <Textarea rows={4} placeholder="Alice | 2024-08 | 5 | Séjour parfait !\nMarc | 2024-02 | 4.5 | Excellent emplacement" {...register("testimonialsText")} />
-                  </Field>
-                </div>
-
-                {/* Similar villas (slugs ou noms) */}
-                <Field label="Similar villas (slugs ou noms, 1 par ligne)">
-                  <Textarea rows={3} placeholder="chalet-aiglons\nchalet-bellevue" {...register("similarVillasText")} />
-                </Field>
 
                 {/* DROPZONE */}
                 <div className="space-y-3">

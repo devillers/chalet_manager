@@ -100,10 +100,8 @@ export async function generateStaticParams() {
   return slugs.map((s) => ({ slug: s.slug }));
 }
 
-export default async function VillaPage(props: {
-  params: { slug: string } | Promise<{ slug: string }>;
-}) {
-  const { slug } = await Promise.resolve(props.params);
+export default async function VillaPage({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
 
   const villa = await getVillaBySlug(slug);
   if (!villa) notFound();
