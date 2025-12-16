@@ -40,6 +40,12 @@ type VillaForMapDoc = {
   country?: string;
   street?: string;
   postalCode?: string;
+  maxGuests?: number;
+  bathrooms?: number;
+  surface?: number;
+  shortDescription?: string;
+  imageUrl?: string;
+  imageAlt?: string;
   lat?: number;
   lng?: number;
 };
@@ -145,6 +151,12 @@ export default async function CartePage() {
         city: typeof doc?.city === "string" ? doc.city : undefined,
         region: typeof doc?.region === "string" ? doc.region : undefined,
         country: typeof doc?.country === "string" ? doc.country : undefined,
+        intro: typeof doc?.shortDescription === "string" ? doc.shortDescription : undefined,
+        surface: typeof doc?.surface === "number" && Number.isFinite(doc.surface) ? doc.surface : undefined,
+        maxGuests: typeof doc?.maxGuests === "number" && Number.isFinite(doc.maxGuests) ? doc.maxGuests : undefined,
+        bathrooms: typeof doc?.bathrooms === "number" && Number.isFinite(doc.bathrooms) ? doc.bathrooms : undefined,
+        imageUrl: typeof doc?.imageUrl === "string" ? doc.imageUrl : undefined,
+        imageAlt: typeof doc?.imageAlt === "string" ? doc.imageAlt : undefined,
         lat: chosen.lat,
         lng: chosen.lng,
       });

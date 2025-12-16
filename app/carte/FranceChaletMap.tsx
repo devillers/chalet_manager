@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import mapboxgl from "mapbox-gl";
+import { Bath, ExternalLink, MapPin, Ruler, Users } from "lucide-react";
 import type { VillaMapPoint } from "./type";
 
 type Props = {
@@ -22,6 +23,12 @@ const MARKER_SAFE_DIAMETER_PX = 38;
 
 function easeOutCubic(t: number) {
   return 1 - Math.pow(1 - t, 3);
+}
+
+function truncate(value: string, maxChars: number) {
+  const s = value.trim();
+  if (s.length <= maxChars) return s;
+  return `${s.slice(0, maxChars - 1).trimEnd()}…`;
 }
 
 function computeMarkerOffsets(map: mapboxgl.Map, pts: VillaMapPoint[]) {
@@ -104,6 +111,8 @@ export function FranceChaletMap({ villas }: Props) {
   const markersRef = useRef<mapboxgl.Marker[]>([]);
 
   const [isReady, setIsReady] = useState(false);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [isListOpen, setIsListOpen] = useState(false);
 
   const points = useMemo(
     () =>
@@ -117,6 +126,22 @@ export function FranceChaletMap({ villas }: Props) {
       ),
     [villas]
   );
+
+  const sortedPoints = useMemo(() => {
+    const copy = [...points];
+    copy.sort((a, b) => {
+      const aCity = a.city || a.region || "";
+      const bCity = b.city || b.region || "";
+      return aCity.localeCompare(bCity) || a.name.localeCompare(b.name);
+    });
+    return copy;
+  }, [points]);
+
+  const previewVilla = useMemo(() => {
+    if (!sortedPoints.length) return null;
+    if (hoveredId) return sortedPoints.find((v) => v._id === hoveredId) ?? sortedPoints[0];
+    return sortedPoints[0];
+  }, [sortedPoints, hoveredId]);
 
   const prefersReducedMotion = useMemo(() => {
     if (typeof window === "undefined") return false;
@@ -153,47 +178,32 @@ export function FranceChaletMap({ villas }: Props) {
         el.className = "chalet-marker";
         const offset = offsets.get(v._id) ?? [0, 0];
 
+        el.setAttribute("role", "button");
+        el.setAttribute("tabindex", "0");
+        el.setAttribute("aria-label", `Ouvrir ${v.name}`);
+
+        const handleEnter = () => setHoveredId(v._id);
+        const handleLeave = () => setHoveredId((prev) => (prev === v._id ? null : prev));
+
+        el.addEventListener("mouseenter", handleEnter);
+        el.addEventListener("mouseleave", handleLeave);
+        el.addEventListener("focus", handleEnter);
+        el.addEventListener("blur", handleLeave);
+
         el.addEventListener("click", (e) => {
           e.preventDefault();
           e.stopPropagation();
           router.push(`/sites/${encodeURIComponent(v.slug)}`);
         });
 
-        const subtitle = v.city || v.region || v.country || "";
-        const popupNode = document.createElement("div");
-        popupNode.style.minWidth = "200px";
-
-        const title = document.createElement("div");
-        title.textContent = v.name;
-        title.style.fontWeight = "600";
-        title.style.marginBottom = "6px";
-        popupNode.appendChild(title);
-
-        if (subtitle) {
-          const sub = document.createElement("div");
-          sub.textContent = subtitle;
-          sub.style.fontSize = "12px";
-          sub.style.opacity = "0.75";
-          sub.style.marginBottom = "8px";
-          popupNode.appendChild(sub);
-        }
-
-        const hint = document.createElement("div");
-        hint.textContent = "Clique sur le point pour ouvrir la fiche.";
-        hint.style.fontSize = "12px";
-        hint.style.opacity = "0.7";
-        popupNode.appendChild(hint);
-
-        const popup = new mapboxgl.Popup({
-          offset: 18,
-          closeButton: true,
-          closeOnClick: true,
-          maxWidth: "280px",
-        }).setDOMContent(popupNode);
+        el.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          router.push(`/sites/${encodeURIComponent(v.slug)}`);
+        });
 
         const marker = new mapboxgl.Marker({ element: el, anchor: "center", offset })
           .setLngLat([v.lng, v.lat])
-          .setPopup(popup)
           .addTo(map);
 
         window.setTimeout(() => el.classList.add("is-visible"), 220 + idx * 110);
@@ -327,9 +337,178 @@ export function FranceChaletMap({ villas }: Props) {
       <div className="pointer-events-none absolute left-4 top-4 rounded-2xl bg-black/45 px-3 py-2 text-xs text-white ring-1 ring-white/10 backdrop-blur">
         <div className="font-medium">Carte</div>
         <div className="text-white/70">
-          {isReady ? `${points.length} villas affichées` : "Animation…"}
+          {isReady ? `${points.length} villas · survol = aperçu · clic = ouvrir` : "Animation…"}
         </div>
       </div>
+
+      {/* Mobile toggle */}
+      <div className="absolute bottom-4 left-4 z-10 md:hidden">
+        <button
+          type="button"
+          onClick={() => setIsListOpen((v) => !v)}
+          className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-950 shadow-lg shadow-black/20"
+        >
+          <MapPin className="h-4 w-4" />
+          {isListOpen ? "Masquer la liste" : "Liste des villas"}
+        </button>
+      </div>
+
+      {/* Desktop properties panel */}
+      <aside className="absolute right-4 top-4 z-10 hidden max-h-[calc(100%-2rem)] w-[360px] overflow-hidden rounded-3xl bg-white/10 ring-1 ring-white/15 backdrop-blur-xl md:block">
+        <div className="flex h-full flex-col">
+          <div className="border-b border-white/10 px-5 py-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/70">Propriétés</p>
+            <p className="mt-1 text-sm text-white/80">{sortedPoints.length} villas</p>
+          </div>
+
+          <div className="p-5">
+            {previewVilla ? (
+              <div className="overflow-hidden rounded-2xl bg-black/25 ring-1 ring-white/10">
+                {previewVilla.imageUrl ? (
+                  <div className="relative aspect-16/10 w-full overflow-hidden bg-black/40">
+                    <div
+                      aria-hidden="true"
+                      className="absolute inset-0 bg-cover bg-center"
+                      style={{ backgroundImage: `url(${previewVilla.imageUrl})` }}
+                    />
+                    <div className="absolute inset-0 bg-linear-to-t from-black/70 via-black/10 to-transparent" />
+                    <div className="absolute bottom-0 left-0 right-0 p-4">
+                      <p className="text-sm font-semibold text-white">{previewVilla.name}</p>
+                      <p className="mt-1 text-xs text-white/70">
+                        {previewVilla.city || previewVilla.region || previewVilla.country || "—"}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-4">
+                    <p className="text-sm font-semibold text-white">{previewVilla.name}</p>
+                    <p className="mt-1 text-xs text-white/70">
+                      {previewVilla.city || previewVilla.region || previewVilla.country || "—"}
+                    </p>
+                  </div>
+                )}
+
+                <div className="space-y-3 p-4">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-xl bg-white/5 p-3 ring-1 ring-white/10">
+                      <div className="flex items-center gap-2 text-xs text-white/70">
+                        <Users className="h-4 w-4" />
+                        Pers.
+                      </div>
+                      <div className="mt-1 text-sm font-semibold text-white">
+                        {typeof previewVilla.maxGuests === "number" ? previewVilla.maxGuests : "—"}
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-white/5 p-3 ring-1 ring-white/10">
+                      <div className="flex items-center gap-2 text-xs text-white/70">
+                        <Bath className="h-4 w-4" />
+                        SDB
+                      </div>
+                      <div className="mt-1 text-sm font-semibold text-white">
+                        {typeof previewVilla.bathrooms === "number" ? previewVilla.bathrooms : "—"}
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-white/5 p-3 ring-1 ring-white/10">
+                      <div className="flex items-center gap-2 text-xs text-white/70">
+                        <Ruler className="h-4 w-4" />
+                        m²
+                      </div>
+                      <div className="mt-1 text-sm font-semibold text-white">
+                        {typeof previewVilla.surface === "number" ? previewVilla.surface : "—"}
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-sm leading-relaxed text-white/80">
+                    {previewVilla.intro ? truncate(previewVilla.intro, 160) : "—"}
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/sites/${encodeURIComponent(previewVilla.slug)}`)}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-950 hover:bg-white/90"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    Ouvrir la fiche
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-2xl bg-white/5 p-4 text-sm text-white/70 ring-1 ring-white/10">
+                Aucune villa géolocalisée.
+              </div>
+            )}
+          </div>
+
+          <div className="min-h-0 flex-1 border-t border-white/10">
+            <div className="max-h-full overflow-y-auto p-3">
+              <div className="space-y-2">
+                {sortedPoints.map((v) => {
+                  const isActive = v._id === previewVilla?._id;
+                  return (
+                    <button
+                      key={v._id}
+                      type="button"
+                      onMouseEnter={() => setHoveredId(v._id)}
+                      onMouseLeave={() => setHoveredId(null)}
+                      onFocus={() => setHoveredId(v._id)}
+                      onBlur={() => setHoveredId(null)}
+                      onClick={() => router.push(`/sites/${encodeURIComponent(v.slug)}`)}
+                      className={[
+                        "w-full rounded-2xl px-3 py-3 text-left transition ring-1 ring-inset",
+                        isActive ? "bg-white/10 ring-white/15" : "bg-white/5 ring-white/10 hover:bg-white/10",
+                      ].join(" ")}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-white">{v.name}</p>
+                          <p className="mt-1 text-xs text-white/65">{v.city || v.region || v.country || "—"}</p>
+                        </div>
+                        <span className="text-xs text-white/60">↗</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* Mobile panel */}
+      <aside className={["absolute inset-x-4 bottom-16 z-10 md:hidden", isListOpen ? "block" : "hidden"].join(" ")}>
+        <div className="max-h-[55vh] overflow-hidden rounded-3xl bg-white/10 ring-1 ring-white/15 backdrop-blur-xl">
+          <div className="border-b border-white/10 px-5 py-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/70">Propriétés</p>
+            <p className="mt-1 text-sm text-white/80">{sortedPoints.length} villas</p>
+          </div>
+
+          <div className="max-h-[calc(55vh-4rem)] overflow-y-auto p-3">
+            <div className="space-y-2">
+              {sortedPoints.map((v) => (
+                <button
+                  key={v._id}
+                  type="button"
+                  onMouseEnter={() => setHoveredId(v._id)}
+                  onMouseLeave={() => setHoveredId(null)}
+                  onFocus={() => setHoveredId(v._id)}
+                  onBlur={() => setHoveredId(null)}
+                  onClick={() => router.push(`/sites/${encodeURIComponent(v.slug)}`)}
+                  className="w-full rounded-2xl bg-white/5 px-3 py-3 text-left ring-1 ring-inset ring-white/10 hover:bg-white/10"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-white">{v.name}</p>
+                      <p className="mt-1 text-xs text-white/65">{v.city || v.region || v.country || "—"}</p>
+                    </div>
+                    <span className="text-xs text-white/60">↗</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </aside>
     </section>
   );
 }

@@ -16,6 +16,12 @@ export const VILLAS_FOR_MAP_QUERY = groq`
     country,
     street,
     postalCode,
+    maxGuests,
+    bathrooms,
+    surface,
+    shortDescription,
+    "imageUrl": coalesce(heroImage.asset->url, gallery[0].asset->url),
+    "imageAlt": coalesce(heroImage.alt, gallery[0].alt, name),
     // geopoint may be missing; we will geocode from address as fallback
     "lat": location.lat,
     "lng": location.lng
