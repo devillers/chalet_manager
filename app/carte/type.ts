@@ -1,4 +1,4 @@
-// app/carte/types.ts
+// app/carte/type.ts
 export type VillaMapPoint = {
   _id: string;
   name: string;

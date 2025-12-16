@@ -156,12 +156,13 @@ export default async function CartePage() {
   // Si aucune villa géolocalisée, on peut rendre un état vide minimal
   if (!villas || villas.length === 0) {
     return (
-      <main className="min-h-screen bg-slate-950">
-        <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col px-4 py-8">
-          <div className="mb-6">
+      <main className="h-screen w-screen">
+        <div className="flex h-full w-full flex-col px-4 py-8 md:px-6">
+          <div className="my-auto max-w-3xl">
             <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">Carte interactive</h1>
             <p className="mt-2 text-sm text-white/70">
-              Aucune villa n’a encore de coordonnées GPS (champ <code className="rounded bg-white/10 px-1">location</code>).
+              Aucune villa n’a encore de coordonnées GPS (champ{" "}
+              <code className="rounded bg-white/10 px-1">location</code>).
             </p>
           </div>
         </div>
@@ -170,13 +171,12 @@ export default async function CartePage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950">
-        <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col px-4 py-6">
-          <div className="mb-6 flex items-end justify-between gap-4">
+    <main className="h-screen w-screen 0">
+      <div className="flex h-full w-full min-h-0 flex-col">
+        <header className="shrink-0 border-b border-white/10 px-4 py-4 md:px-6">
+          <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">
-                Carte interactive
-              </h1>
+              <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">Carte interactive</h1>
               <p className="mt-1 text-sm text-white/70">
                 Animation France → zoom, puis apparition des villas.
               </p>
@@ -191,12 +191,14 @@ export default async function CartePage() {
                 </p>
               ) : null}
             </div>
+
             <div className="text-right text-xs text-white/60">{villas.length} villas</div>
           </div>
+        </header>
 
-          <div className="flex-1 pb-4">
-            <FranceMapClient villas={villas} />
-          </div>
+        <div className="min-h-0 flex-1">
+          <FranceMapClient villas={villas} />
+        </div>
       </div>
     </main>
   );
