@@ -406,11 +406,11 @@ export default async function AdminDashboardPage({
     tab === "owners" ? "Propriétaires" : tab === "posts" ? "Articles" : tab === "cities" ? "Villes" : "Villas";
 
   return (
-    <div className="overflow-hidden rounded-3xl bg-white shadow-xl shadow-slate-900/10 ring-1 ring-slate-100">
+    <div className="h-screen w-screen overflow-hidden bg-slate-50">
       <input id="admin-drawer" type="checkbox" className="peer sr-only" />
 
-      <div className="grid min-h-[78vh] grid-cols-1 lg:grid-cols-[280px_1fr]">
-        <aside className="hidden bg-slate-950 text-white lg:block">
+      <div className="grid h-screen grid-cols-1 lg:grid-cols-[280px_1fr]">
+        <aside className="hidden overflow-y-auto bg-slate-950 text-white lg:block">
           <div className="flex h-full flex-col gap-6 p-6">
             <div>
               <div className="flex items-start justify-between gap-3">
@@ -505,7 +505,7 @@ export default async function AdminDashboardPage({
           </div>
         </aside>
 
-        <section className="flex flex-col bg-slate-50">
+        <section className="flex min-h-0 flex-col bg-slate-50">
           <div className="border-b border-slate-200 bg-white px-4 py-4 lg:px-8">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
@@ -550,7 +550,7 @@ export default async function AdminDashboardPage({
             </div>
           </div>
 
-          <div className="flex-1 p-4 lg:p-8">
+          <div className="flex-1 overflow-y-auto p-4 lg:p-8">
             {tab === "villas" ? (
               <div className="space-y-4">
                 <div className="flex flex-wrap items-end justify-between gap-3">

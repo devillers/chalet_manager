@@ -6,9 +6,20 @@ import { usePathname } from "next/navigation";
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isStudio = pathname?.startsWith("/studio");
+  const isFullScreen =
+    isStudio ||
+    pathname === "/login" ||
+    pathname?.startsWith("/admin") ||
+    pathname?.startsWith("/proprietaire") ||
+    pathname?.startsWith("/locataire") ||
+    pathname?.startsWith("/carte");
 
   if (isStudio) {
     return <div className="fixed inset-0 overflow-hidden">{children}</div>;
+  }
+
+  if (isFullScreen) {
+    return <div className="min-h-screen w-screen">{children}</div>;
   }
 
   return (

@@ -17,8 +17,82 @@ const FRANCE_BOUNDS: mapboxgl.LngLatBoundsLike = [
   [10.0, 51.5],
 ];
 
+const OVERLAP_THRESHOLD_PX = 34;
+const MARKER_SAFE_DIAMETER_PX = 38;
+
 function easeOutCubic(t: number) {
   return 1 - Math.pow(1 - t, 3);
+}
+
+function computeMarkerOffsets(map: mapboxgl.Map, pts: VillaMapPoint[]) {
+  const projected = pts.map((villa) => ({
+    villa,
+    point: map.project([villa.lng, villa.lat]),
+  }));
+
+  const parent = projected.map((_, idx) => idx);
+
+  function find(i: number): number {
+    let cur = i;
+    while (parent[cur] !== cur) {
+      parent[cur] = parent[parent[cur]];
+      cur = parent[cur];
+    }
+    return cur;
+  }
+
+  function union(a: number, b: number) {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[rb] = ra;
+  }
+
+  for (let i = 0; i < projected.length; i++) {
+    for (let j = i + 1; j < projected.length; j++) {
+      const dx = projected[i].point.x - projected[j].point.x;
+      const dy = projected[i].point.y - projected[j].point.y;
+      if (Math.hypot(dx, dy) < OVERLAP_THRESHOLD_PX) union(i, j);
+    }
+  }
+
+  const groups = new Map<number, number[]>();
+  for (let i = 0; i < projected.length; i++) {
+    const root = find(i);
+    const existing = groups.get(root);
+    if (existing) existing.push(i);
+    else groups.set(root, [i]);
+  }
+
+  const offsets = new Map<string, mapboxgl.PointLike>();
+
+  for (const indices of groups.values()) {
+    if (indices.length === 1) {
+      const villa = projected[indices[0]].villa;
+      offsets.set(villa._id, [0, 0]);
+      continue;
+    }
+
+    // Stable ordering for deterministic offsets
+    indices.sort((a, b) => projected[a].villa.slug.localeCompare(projected[b].villa.slug));
+
+    const n = indices.length;
+    const denom = 2 * Math.sin(Math.PI / n);
+    const radius =
+      denom > 0
+        ? Math.min(72, Math.max(18, Math.ceil(MARKER_SAFE_DIAMETER_PX / denom)))
+        : 28;
+
+    const startAngle = -Math.PI / 2;
+    for (let idx = 0; idx < n; idx++) {
+      const angle = startAngle + (idx * 2 * Math.PI) / n;
+      const x = Math.round(Math.cos(angle) * radius);
+      const y = Math.round(Math.sin(angle) * radius);
+      const villa = projected[indices[idx]].villa;
+      offsets.set(villa._id, [x, y]);
+    }
+  }
+
+  return offsets;
 }
 
 export function FranceChaletMap({ villas }: Props) {
@@ -71,11 +145,13 @@ export function FranceChaletMap({ villas }: Props) {
     function spawnMarkers(map: mapboxgl.Map, pts: VillaMapPoint[]) {
       clearMarkers();
 
+      const offsets = computeMarkerOffsets(map, pts);
       const newMarkers: mapboxgl.Marker[] = [];
 
       pts.forEach((v, idx) => {
         const el = document.createElement("div");
         el.className = "chalet-marker";
+        const offset = offsets.get(v._id) ?? [0, 0];
 
         el.addEventListener("click", (e) => {
           e.preventDefault();
@@ -115,7 +191,7 @@ export function FranceChaletMap({ villas }: Props) {
           maxWidth: "280px",
         }).setDOMContent(popupNode);
 
-        const marker = new mapboxgl.Marker({ element: el, anchor: "center" })
+        const marker = new mapboxgl.Marker({ element: el, anchor: "center", offset })
           .setLngLat([v.lng, v.lat])
           .setPopup(popup)
           .addTo(map);
@@ -140,7 +216,7 @@ export function FranceChaletMap({ villas }: Props) {
         const p = pts[0];
         map.easeTo({
           center: [p.lng, p.lat],
-          zoom: 10,
+          zoom: 12.5,
           bearing: -18,
           pitch: 62,
           duration: instant ? 0 : 1200,
@@ -161,7 +237,7 @@ export function FranceChaletMap({ villas }: Props) {
 
       map.fitBounds(bounds, {
         padding: { top: 140, left: 40, right: 40, bottom: 40 },
-        maxZoom: 10.5,
+        maxZoom: 13.5,
         duration: instant ? 0 : 2400,
         bearing: -18,
         pitch: 62,
@@ -243,7 +319,7 @@ export function FranceChaletMap({ villas }: Props) {
       <div className="pointer-events-none absolute left-4 top-4 rounded-2xl bg-black/45 px-3 py-2 text-xs text-white ring-1 ring-white/10 backdrop-blur">
         <div className="font-medium">Carte</div>
         <div className="text-white/70">
-          {isReady ? "Points affichés" : "Animation…"}
+          {isReady ? `${points.length} villas affichées` : "Animation…"}
         </div>
       </div>
     </section>
