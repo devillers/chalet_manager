@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import mapboxgl from "mapbox-gl";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -16,6 +17,7 @@ import {
   Sparkles,
   Users,
   Waves,
+  X,
 } from "lucide-react";
 import type { VillaMapPoint } from "./type";
 
@@ -33,8 +35,8 @@ const FRANCE_BOUNDS: mapboxgl.LngLatBoundsLike = [
 const OVERLAP_THRESHOLD_PX = 34;
 const MARKER_SAFE_DIAMETER_PX = 38;
 
-const CARD_FALLBACK_WIDTH = 360;
-const CARD_FALLBACK_HEIGHT = 380;
+const CARD_FALLBACK_WIDTH = 392;
+const CARD_FALLBACK_HEIGHT = 420;
 
 function easeOutCubic(t: number) {
   return 1 - Math.pow(1 - t, 3);
@@ -98,11 +100,16 @@ function computeMarkerOffsets(map: mapboxgl.Map, pts: VillaMapPoint[]) {
       continue;
     }
 
-    indices.sort((a, b) => projected[a].villa.slug.localeCompare(projected[b].villa.slug));
+    indices.sort((a, b) =>
+      projected[a].villa.slug.localeCompare(projected[b].villa.slug)
+    );
 
     const n = indices.length;
     const denom = 2 * Math.sin(Math.PI / n);
-    const radius = denom > 0 ? Math.min(72, Math.max(18, Math.ceil(MARKER_SAFE_DIAMETER_PX / denom))) : 28;
+    const radius =
+      denom > 0
+        ? Math.min(72, Math.max(18, Math.ceil(MARKER_SAFE_DIAMETER_PX / denom)))
+        : 28;
 
     const startAngle = -Math.PI / 2;
     for (let idx = 0; idx < n; idx++) {
@@ -118,11 +125,26 @@ function computeMarkerOffsets(map: mapboxgl.Map, pts: VillaMapPoint[]) {
 }
 
 const AMENITY_PRESETS = [
-  { key: "jacuzzi", label: "Jacuzzi", Icon: Sparkles, match: ["jacuzzi", "spa", "hot tub", "bain bouillonnant"] },
+  {
+    key: "jacuzzi",
+    label: "Jacuzzi",
+    Icon: Sparkles,
+    match: ["jacuzzi", "spa", "hot tub", "bain bouillonnant"],
+  },
   { key: "sauna", label: "Sauna", Icon: Flame, match: ["sauna"] },
   { key: "piscine", label: "Piscine", Icon: Waves, match: ["piscine", "pool"] },
-  { key: "hammam", label: "Hammam", Icon: CloudFog, match: ["hammam", "steam"] },
-  { key: "cinema", label: "Cinéma", Icon: Film, match: ["cinema", "home cinema", "salle cinema", "movie"] },
+  {
+    key: "hammam",
+    label: "Hammam",
+    Icon: CloudFog,
+    match: ["hammam", "steam"],
+  },
+  {
+    key: "cinema",
+    label: "Cinéma",
+    Icon: Film,
+    match: ["cinema", "home cinema", "salle cinema", "movie"],
+  },
 ] as const;
 
 function resolveAmenityBadges(amenities?: string[]) {
@@ -131,7 +153,9 @@ function resolveAmenityBadges(amenities?: string[]) {
     .map((value) => value.toLowerCase());
 
   return AMENITY_PRESETS.filter((preset) =>
-    preset.match.some((needle) => normalized.some((value) => value.includes(needle)))
+    preset.match.some((needle) =>
+      normalized.some((value) => value.includes(needle))
+    )
   );
 }
 
@@ -160,25 +184,40 @@ type Breadcrumb = {
   end: { x: number; y: number };
 };
 
-function computeCardPlacement(
+function computeFixedCardPlacement(
   rootSize: { width: number; height: number },
-  anchor: { x: number; y: number },
+  hudBottom: number,
   cardSize: { width: number; height: number }
 ): CardPlacement {
-  const margin = 18;
-  const gap = 16;
-  const width = Math.min(cardSize.width, Math.max(240, rootSize.width - margin * 2));
-  const height = Math.min(cardSize.height, Math.max(260, rootSize.height - margin * 2));
+  const margin = 16;
 
-  const canPlaceRight = anchor.x + gap + width + margin <= rootSize.width;
-  const canPlaceLeft = anchor.x - gap - width - margin >= 0;
+  // Mobile: bottom sheet-ish, centered.
+  if (rootSize.width < 768) {
+    const width = Math.min(cardSize.width, rootSize.width - margin * 2);
+    const height = Math.min(
+      cardSize.height,
+      Math.max(260, rootSize.height - Math.max(hudBottom + 16, 90) - margin * 2)
+    );
+    const x = Math.round((rootSize.width - width) / 2);
+    const y = Math.round(
+      clamp(rootSize.height - height - margin, hudBottom + 12, rootSize.height)
+    );
+    return { x, y, side: "left" };
+  }
 
-  const side: CardPlacement["side"] = canPlaceRight || !canPlaceLeft ? "right" : "left";
-  const rawX = side === "right" ? anchor.x + gap : anchor.x - gap - width;
-  const rawY = anchor.y - height * 0.28;
-
-  const x = clamp(rawX, margin, rootSize.width - width - margin);
-  const y = clamp(rawY, margin, rootSize.height - height - margin);
+  // Desktop: fixed “briefing area” left.
+  const height = Math.min(
+    cardSize.height,
+    Math.max(300, rootSize.height - margin * 2)
+  );
+  const side: CardPlacement["side"] = "left";
+  const x = Math.round(clamp(rootSize.width * 0.06, margin, 128));
+  const minTop = Math.max(margin, Math.round(hudBottom + 16));
+  const y = clamp(
+    (rootSize.height - height) / 2,
+    minTop,
+    rootSize.height - height - margin
+  );
 
   return { x, y, side };
 }
@@ -186,10 +225,14 @@ function computeCardPlacement(
 export function FranceChaletMap({ villas }: Props) {
   const router = useRouter();
   const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+  const tokenError = token
+    ? null
+    : "Token Mapbox manquant (NEXT_PUBLIC_MAPBOX_TOKEN).";
 
   const rootRef = useRef<HTMLElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const hudRef = useRef<HTMLDivElement | null>(null);
 
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<mapboxgl.Marker[]>([]);
@@ -202,6 +245,7 @@ export function FranceChaletMap({ villas }: Props) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [cardPos, setCardPos] = useState<CardPlacement | null>(null);
   const [breadcrumb, setBreadcrumb] = useState<Breadcrumb | null>(null);
+  const [mapError, setMapError] = useState<string | null>(null);
 
   useEffect(() => {
     activeIdRef.current = activeId;
@@ -230,7 +274,7 @@ export function FranceChaletMap({ villas }: Props) {
         setActiveId(null);
         setCardPos(null);
         setBreadcrumb(null);
-      }, 170);
+      }, 900);
     },
     [cancelHoverClear]
   );
@@ -253,24 +297,28 @@ export function FranceChaletMap({ villas }: Props) {
     return points.find((villa) => villa._id === activeId) ?? null;
   }, [points, activeId]);
 
+  const amenityBadges = useMemo(() => {
+    if (!activeVilla) return [];
+    return resolveAmenityBadges(activeVilla.amenities);
+  }, [activeVilla]);
+
   const prefersReducedMotion = useMemo(() => {
     if (typeof window === "undefined") return false;
-    return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+    return (
+      window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false
+    );
   }, []);
 
-  const primeOverlayFromMarkerEl = useCallback((el: HTMLDivElement) => {
+  const primeOverlayPlacement = useCallback(() => {
     const root = rootRef.current;
     if (!root) return;
     const rootRect = root.getBoundingClientRect();
-    const rect = el.getBoundingClientRect();
-    const anchor = {
-      x: rect.left - rootRect.left + rect.width / 2,
-      y: rect.top - rootRect.top + rect.height / 2,
-    };
+    const hudRect = hudRef.current?.getBoundingClientRect();
+    const hudBottom = hudRect ? hudRect.bottom - rootRect.top : 0;
     setCardPos(
-      computeCardPlacement(
+      computeFixedCardPlacement(
         { width: rootRect.width, height: rootRect.height },
-        anchor,
+        hudBottom,
         { width: CARD_FALLBACK_WIDTH, height: CARD_FALLBACK_HEIGHT }
       )
     );
@@ -305,6 +353,7 @@ export function FranceChaletMap({ villas }: Props) {
         const el = document.createElement("div");
         el.className = "chalet-marker";
         el.dataset.villaId = villa._id;
+
         const offset = offsets.get(villa._id) ?? [0, 0];
 
         el.setAttribute("role", "button");
@@ -313,7 +362,7 @@ export function FranceChaletMap({ villas }: Props) {
 
         const handleEnter = () => {
           el.classList.add("is-active");
-          primeOverlayFromMarkerEl(el);
+          primeOverlayPlacement();
           activateVilla(villa._id);
         };
         const handleLeave = () => {
@@ -337,11 +386,15 @@ export function FranceChaletMap({ villas }: Props) {
           router.push(`/sites/${encodeURIComponent(villa.slug)}`);
         });
 
-        const marker = new mapboxgl.Marker({ element: el, anchor: "center", offset })
+        const marker = new mapboxgl.Marker({
+          element: el,
+          anchor: "center",
+          offset,
+        })
           .setLngLat([villa.lng, villa.lat])
           .addTo(map);
 
-        window.setTimeout(() => el.classList.add("is-visible"), 220 + idx * 110);
+        window.setTimeout(() => el.classList.add("is-visible"), 220 + idx * 90);
 
         newMarkers.push(marker);
       });
@@ -349,7 +402,11 @@ export function FranceChaletMap({ villas }: Props) {
       markersRef.current = newMarkers;
     }
 
-    function zoomToPointsThenReveal(map: mapboxgl.Map, pts: VillaMapPoint[], instant: boolean) {
+    function zoomToPointsThenReveal(
+      map: mapboxgl.Map,
+      pts: VillaMapPoint[],
+      instant: boolean
+    ) {
       if (!pts.length) return;
 
       if (pts.length === 1) {
@@ -376,7 +433,7 @@ export function FranceChaletMap({ villas }: Props) {
       for (const p of pts) bounds.extend([p.lng, p.lat]);
 
       map.fitBounds(bounds, {
-        padding: { top: 140, left: 40, right: 40, bottom: 40 },
+        padding: { top: 150, left: 48, right: 48, bottom: 48 },
         maxZoom: 13.5,
         duration: instant ? 0 : 2400,
         bearing: -18,
@@ -407,7 +464,35 @@ export function FranceChaletMap({ villas }: Props) {
 
     mapRef.current = map;
 
-    map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), "top-right");
+    map.addControl(
+      new mapboxgl.NavigationControl({ visualizePitch: true }),
+      "top-right"
+    );
+
+    const handleMapError = (evt: unknown) => {
+      const message =
+        (evt as { error?: unknown } | null | undefined)?.error instanceof Error
+          ? ((evt as { error: Error }).error.message ?? null)
+          : typeof (evt as { error?: unknown } | null | undefined)?.error ===
+              "string"
+            ? String((evt as { error?: unknown }).error)
+            : null;
+      if (!message) return;
+      if (cancelled) return;
+      setMapError((prev) => prev ?? message);
+    };
+
+    map.on("error", handleMapError);
+
+    const forceResize = () => {
+      try {
+        map.resize();
+      } catch {}
+    };
+
+    forceResize();
+    window.requestAnimationFrame(forceResize);
+    window.setTimeout(forceResize, 120);
 
     const resizeObserver = new ResizeObserver(() => {
       try {
@@ -435,7 +520,7 @@ export function FranceChaletMap({ villas }: Props) {
       }
 
       map.easeTo({
-        pitch: 35,
+        pitch: 34,
         bearing: -8,
         duration: 900,
         easing: easeOutCubic,
@@ -450,12 +535,22 @@ export function FranceChaletMap({ villas }: Props) {
     return () => {
       cancelled = true;
       cancelHoverClear();
+      map.off("error", handleMapError);
       clearMarkers();
       resizeObserver.disconnect();
       map.remove();
       mapRef.current = null;
     };
-  }, [activateVilla, cancelHoverClear, points, prefersReducedMotion, primeOverlayFromMarkerEl, router, scheduleHoverClear, token]);
+  }, [
+    activateVilla,
+    cancelHoverClear,
+    points,
+    prefersReducedMotion,
+    primeOverlayPlacement,
+    router,
+    scheduleHoverClear,
+    token,
+  ]);
 
   useEffect(() => {
     markersRef.current.forEach((marker) => {
@@ -487,6 +582,8 @@ export function FranceChaletMap({ villas }: Props) {
         const rootRect = root.getBoundingClientRect();
         const mapRect = container.getBoundingClientRect();
         const cardRect = card.getBoundingClientRect();
+        const hudRect = hudRef.current?.getBoundingClientRect();
+        const hudBottom = hudRect ? hudRect.bottom - rootRect.top : 0;
 
         const projected = map.project([activeVilla.lng, activeVilla.lat]);
         const [ox, oy] = toOffsetTuple(offsetsRef.current.get(activeVilla._id));
@@ -494,9 +591,9 @@ export function FranceChaletMap({ villas }: Props) {
         const anchorX = mapRect.left - rootRect.left + projected.x + ox;
         const anchorY = mapRect.top - rootRect.top + projected.y + oy;
 
-        const placement = computeCardPlacement(
+        const placement = computeFixedCardPlacement(
           { width: rootRect.width, height: rootRect.height },
-          { x: anchorX, y: anchorY },
+          hudBottom,
           { width: cardRect.width, height: cardRect.height }
         );
 
@@ -512,8 +609,11 @@ export function FranceChaletMap({ villas }: Props) {
           return placement;
         });
 
-        const endX = placement.side === "right" ? placement.x : placement.x + cardRect.width;
-        const endY = placement.y + Math.min(170, cardRect.height * 0.32);
+        const endX =
+          placement.side === "right"
+            ? placement.x
+            : placement.x + cardRect.width;
+        const endY = placement.y + cardRect.height / 2;
 
         setBreadcrumb((prev) => {
           if (
@@ -525,7 +625,10 @@ export function FranceChaletMap({ villas }: Props) {
           ) {
             return prev;
           }
-          return { start: { x: anchorX, y: anchorY }, end: { x: endX, y: endY } };
+          return {
+            start: { x: anchorX, y: anchorY },
+            end: { x: endX, y: endY },
+          };
         });
       });
     };
@@ -551,43 +654,68 @@ export function FranceChaletMap({ villas }: Props) {
     const { start, end } = breadcrumb;
     const dir = end.x >= start.x ? 1 : -1;
     const dx = Math.max(110, Math.min(240, Math.abs(end.x - start.x) * 0.55));
-    return `M ${start.x} ${start.y} C ${start.x + dir * dx} ${start.y}, ${end.x - dir * dx} ${end.y}, ${end.x} ${end.y}`;
+    return `M ${start.x} ${start.y} C ${start.x + dir * dx} ${start.y}, ${
+      end.x - dir * dx
+    } ${end.y}, ${end.x} ${end.y}`;
   }, [breadcrumb]);
 
-  const safeCardPos = cardPos ?? { x: 18, y: 18, side: "right" as const };
-  const transformOrigin = safeCardPos.side === "right" ? "0% 20%" : "100% 20%";
+  const safeCardPos = cardPos ?? { x: 18, y: 120, side: "left" as const };
+  const transformOrigin = safeCardPos.side === "right" ? "100% 50%" : "0% 50%";
 
   return (
-    <section ref={rootRef} className="relative h-full w-full overflow-hidden bg-slate-950">
-      <div ref={containerRef} className="absolute inset-0" />
+    <section
+      ref={rootRef}
+      className="relative h-screen w-screen overflow-hidden bg-slate-950"
+    >
+      <div ref={containerRef} className="h-full w-full" />
 
-      <AnimatePresence>
-        {!activeVilla ? (
-          <motion.div
-            key="hud"
-            aria-hidden="true"
-            className="pointer-events-none absolute left-5 top-5 z-20 max-w-[min(420px,calc(100vw-2.5rem))] rounded-3xl border border-white/10 bg-black/35 px-4 py-3 text-white shadow-2xl shadow-black/40 backdrop-blur"
-            initial={{ opacity: 0, y: 12, scale: 0.99 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 8, scale: 0.99 }}
-            transition={{ duration: 0.25, ease: "easeOut" }}
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/60">Carte interactive</p>
-                <p className="mt-1 text-sm font-semibold text-white">
-                  {isReady ? `${points.length} villas` : "Calibration…"}
-                </p>
-                <p className="mt-1 text-xs leading-relaxed text-white/70">Survolez un point pour verrouiller une fiche.</p>
-              </div>
-              <div className="rounded-2xl bg-white/5 px-3 py-2 text-[11px] text-white/70 ring-1 ring-white/10">
-                HUD
-              </div>
+      {/* Vignette + subtle glow */}
+      <div className="pointer-events-none absolute inset-0 z-10">
+        <div className="absolute inset-0 bg-linear-to-b from-black/35 via-black/10 to-black/10" />
+        <div className="absolute -left-24 -top-24 h-[420px] w-[420px] rounded-full bg-[#bd9254]/12 blur-3xl" />
+        <div className="absolute -bottom-24 -right-24 h-[460px] w-[460px] rounded-full bg-white/8 blur-3xl" />
+      </div>
+
+      {/* HUD */}
+      <motion.div
+        ref={hudRef}
+        aria-hidden="true"
+        className="pointer-events-none absolute left-4 top-4 z-20 w-[min(460px,calc(100vw-2rem))] rounded-3xl border border-white/10 bg-black/35 px-4 py-3 shadow-[0_18px_70px_-24px_rgba(0,0,0,0.85)] backdrop-blur-xl"
+        initial={{ opacity: 0, y: 10, scale: 0.99 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.22, ease: "easeOut" }}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/55">
+              Carte interactive
+            </p>
+
+            <div className="mt-1 flex items-center gap-2">
+              <div className="h-2.5 w-2.5 rounded-full bg-[#bd9254]/80 shadow-[0_0_0_6px_rgba(189,146,84,0.12)]" />
+              <p className="truncate text-sm font-semibold text-white">
+                {isReady
+                  ? `${points.length} villas disponibles`
+                  : "Calibration…"}
+              </p>
             </div>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
 
+            <p className="mt-1 text-[11px] leading-relaxed text-white/70">
+              Survolez un point pour afficher la fiche. Cliquez pour ouvrir la
+              page villa.
+            </p>
+
+            {tokenError || mapError ? (
+              <p className="mt-2 text-[11px] text-rose-200">
+                Mapbox:{" "}
+                <span className="text-white/90">{tokenError ?? mapError}</span>
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Breadcrumb (desktop only) */}
       <AnimatePresence>
         {activeVilla && breadcrumbPath ? (
           <motion.svg
@@ -603,7 +731,7 @@ export function FranceChaletMap({ villas }: Props) {
               d={breadcrumbPath}
               fill="none"
               stroke="rgba(189, 146, 84, 0.55)"
-              strokeWidth="5"
+              strokeWidth="6"
               strokeLinecap="round"
               style={{ filter: "blur(4px)" }}
               initial={{ pathLength: 0 }}
@@ -614,7 +742,7 @@ export function FranceChaletMap({ villas }: Props) {
             <motion.path
               d={breadcrumbPath}
               fill="none"
-              stroke="rgba(255, 255, 255, 0.36)"
+              stroke="rgba(255, 255, 255, 0.30)"
               strokeWidth="1.5"
               strokeLinecap="round"
               initial={{ pathLength: 0 }}
@@ -626,6 +754,7 @@ export function FranceChaletMap({ villas }: Props) {
         ) : null}
       </AnimatePresence>
 
+      {/* Card */}
       <AnimatePresence mode="wait">
         {activeVilla ? (
           <motion.div
@@ -634,103 +763,124 @@ export function FranceChaletMap({ villas }: Props) {
             onMouseEnter={cancelHoverClear}
             onMouseLeave={() => scheduleHoverClear(activeVilla._id)}
             style={{ left: safeCardPos.x, top: safeCardPos.y, transformOrigin }}
-            className="absolute z-30 w-[360px] max-w-[calc(100vw-2.5rem)] overflow-hidden rounded-3xl border border-white/10 bg-slate-950/55 shadow-[0_38px_90px_rgba(0,0,0,0.55)] ring-1 ring-white/10 backdrop-blur-xl"
-            initial={{ opacity: 0, y: 12, scale: 0.92, filter: "blur(6px)" }}
+            className={[
+              "absolute z-30",
+              "w-[min(392px,calc(100vw-2rem))]",
+              "max-h-[calc(100vh-2rem)]",
+              "overflow-hidden rounded-3xl",
+              "border border-white/12 bg-black/40",
+              "shadow-[0_26px_90px_-28px_rgba(0,0,0,0.85)] backdrop-blur-2xl",
+            ].join(" ")}
+            initial={{ opacity: 0, y: 10, scale: 0.94, filter: "blur(8px)" }}
             animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-            exit={{ opacity: 0, y: 10, scale: 0.97, filter: "blur(6px)" }}
+            exit={{ opacity: 0, y: 8, scale: 0.98, filter: "blur(8px)" }}
             transition={{ duration: 0.18, ease: "easeOut" }}
           >
+            {/* Top media */}
+            {/* Top media (full-bleed) */}
             <div className="relative">
-              <div className="absolute inset-x-0 top-0 h-[2px] bg-[linear-gradient(90deg,transparent,rgba(189,146,84,0.85),transparent)]" />
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.10),transparent_55%)] opacity-60" />
-              <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(transparent_0%,rgba(255,255,255,0.06)_50%,transparent_100%)] bg-[length:100%_10px] opacity-[0.08]" />
+              <div className="relative aspect-[16/10] w-full">
+                {activeVilla.imageUrl ? (
+                  <>
+                    <Image
+                      src={activeVilla.imageUrl}
+                      alt={activeVilla.imageAlt || activeVilla.name}
+                      fill
+                      sizes="(max-width: 768px) 92vw, 392px"
+                      className="object-cover"
+                      priority={false}
+                    />
+                    <div className="absolute inset-0 bg-linear-to-t from-black/80 via-black/30 to-transparent" />
+                  </>
+                ) : (
+                  <div className="absolute inset-0 bg-gradient-to-br from-white/10 via-white/5 to-transparent" />
+                )}
 
-              {activeVilla.imageUrl ? (
-                <div className="relative aspect-[16/10] w-full overflow-hidden bg-black/40">
-                  <img
-                    src={activeVilla.imageUrl}
-                    alt={activeVilla.imageAlt || activeVilla.name}
-                    className="absolute inset-0 h-full w-full object-cover"
-                    loading="lazy"
-                  />
-                  <div className="absolute inset-0 bg-linear-to-t from-black/80 via-black/25 to-transparent" />
-                  <div className="absolute left-0 right-0 top-0 p-4">
-                    <div className="flex items-center justify-between gap-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/70">
-                        Target locked
-                      </p>
-                      <p className="text-[11px] text-white/65">clic = ouvrir</p>
-                    </div>
-                  </div>
-                  <div className="absolute bottom-0 left-0 right-0 p-4">
-                    <p className="text-lg font-semibold tracking-tight text-white">{activeVilla.name}</p>
-                    <p className="mt-1 text-xs text-white/70">
-                      {activeVilla.city || activeVilla.region || activeVilla.country || "—"}
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="p-5">
-                  <div className="flex items-center justify-between gap-4">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/60">Target locked</p>
-                    <p className="text-[11px] text-white/65">clic = ouvrir</p>
-                  </div>
-                  <p className="mt-3 text-lg font-semibold tracking-tight text-white">{activeVilla.name}</p>
-                  <p className="mt-1 text-xs text-white/70">
-                    {activeVilla.city || activeVilla.region || activeVilla.country || "—"}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveId(null);
+                    setCardPos(null);
+                    setBreadcrumb(null);
+                  }}
+                  className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/35 text-white/85 backdrop-blur hover:bg-black/50"
+                  aria-label="Fermer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+
+                <div className="absolute bottom-0 left-0 right-0 p-4">
+                  <p className="text-[50px] font-thin tracking-tight text-white">
+                    {activeVilla.name}
+                  </p>
+                  <p className="mt-0.5 text-[12px] font-light uppercase text-white/70">
+                    {activeVilla.city ||
+                      activeVilla.region ||
+                      activeVilla.country ||
+                      "—"}
                   </p>
                 </div>
-              )}
+              </div>
+
+              <div className="h-px w-full bg-white/10" />
             </div>
 
-            <div className="space-y-4 p-5">
-              <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-2xl bg-white/5 p-3 ring-1 ring-white/10">
-                  <div className="flex items-center gap-2 text-xs text-white/70">
-                    <Users className="h-4 w-4" />
-                    Pers.
-                  </div>
-                  <div className="mt-1 text-sm font-semibold text-white">
-                    {typeof activeVilla.maxGuests === "number" ? activeVilla.maxGuests : "—"}
-                  </div>
-                </div>
-                <div className="rounded-2xl bg-white/5 p-3 ring-1 ring-white/10">
-                  <div className="flex items-center gap-2 text-xs text-white/70">
-                    <BedDouble className="h-4 w-4" />
-                    Chambres
-                  </div>
-                  <div className="mt-1 text-sm font-semibold text-white">
-                    {typeof activeVilla.bedrooms === "number" ? activeVilla.bedrooms : "—"}
+            {/* Content */}
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+              <div className="grid grid-cols-4 gap-2 mt-2">
+                <div className="flex items-center rounded-2xl border border-white/10 bg-white/5 p-3">
+                  <div className="flex items-center justify-center gap-2 text-[30px] text-white/55">
+                    <Users className="h-8 w-8 text-white" />
+                    <div className="mt-1 text-sm font-semibold text-white">
+                      {typeof activeVilla.maxGuests === "number"
+                        ? activeVilla.maxGuests
+                        : "—"}
+                    </div>
                   </div>
                 </div>
-                <div className="rounded-2xl bg-white/5 p-3 ring-1 ring-white/10">
-                  <div className="flex items-center gap-2 text-xs text-white/70">
-                    <Bath className="h-4 w-4" />
-                    SDB
-                  </div>
-                  <div className="mt-1 text-sm font-semibold text-white">
-                    {typeof activeVilla.bathrooms === "number" ? activeVilla.bathrooms : "—"}
+
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                  <div className="flex items-center justify-center gap-2 text-[30px] text-white/55">
+                    <BedDouble className="h-8 w-8 text-white" />
+                    <div className="mt-1 text-sm font-semibold text-white">
+                      {typeof activeVilla.bedrooms === "number"
+                        ? activeVilla.bedrooms
+                        : "—"}
+                    </div>
                   </div>
                 </div>
-                <div className="rounded-2xl bg-white/5 p-3 ring-1 ring-white/10">
-                  <div className="flex items-center gap-2 text-xs text-white/70">
-                    <Ruler className="h-4 w-4" />
-                    m²
+
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-3 ">
+                  <div className="flex items-center justify-center gap-2 text-[30px] text-white/55">
+                    <Bath className="h-8 w-8 text-white" />
+                    <div className="mt-1 text-sm font-semibold text-white">
+                      {typeof activeVilla.bathrooms === "number"
+                        ? activeVilla.bathrooms
+                        : "—"}
+                    </div>
                   </div>
-                  <div className="mt-1 text-sm font-semibold text-white">
-                    {typeof activeVilla.surface === "number" ? activeVilla.surface : "—"}
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                  <div className="flex items-center justify-center gap-2 text-[30px] text-white/55">
+                    <Ruler className="h-8 w-8 text-white" />
+                    <div className="mt-1 text-sm font-semibold text-white">
+                      {typeof activeVilla.surface === "number"
+                        ? `${activeVilla.surface} m²`
+                        : "—"}
+                    </div>
                   </div>
                 </div>
               </div>
 
-              {resolveAmenityBadges(activeVilla.amenities).length ? (
-                <div className="flex flex-wrap gap-2">
-                  {resolveAmenityBadges(activeVilla.amenities).map(({ key, label, Icon }) => (
+              {amenityBadges.length ? (
+                <div className="mt-2 grid grid-cols-4 gap-2">
+                  {amenityBadges.map(({ key, label, Icon }) => (
                     <span
                       key={key}
-                      className="inline-flex items-center gap-2 rounded-full bg-white/5 px-3 py-1 text-xs font-medium text-white/80 ring-1 ring-white/10"
+                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[12px] font-medium text-white/80"
                     >
-                      <Icon className="h-4 w-4 text-white/80" />
+                      <Icon className="h-4 w-4 text-white" />
                       {label}
                     </span>
                   ))}
@@ -738,21 +888,105 @@ export function FranceChaletMap({ villas }: Props) {
               ) : null}
 
               {activeVilla.intro ? (
-                <p className="text-sm leading-relaxed text-white/80">{truncate(activeVilla.intro, 180)}</p>
+                <p className="mt-3 text-[12px] leading-relaxed text-white/70">
+                  {truncate(activeVilla.intro, 190)}
+                </p>
               ) : null}
 
-              <button
-                type="button"
-                onClick={() => router.push(`/sites/${encodeURIComponent(activeVilla.slug)}`)}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-950 hover:bg-white/90"
-              >
-                <ExternalLink className="h-4 w-4" />
-                Ouvrir la fiche
-              </button>
+              <div className="mt-4">
+                <button
+                  type="button"
+                  onClick={() =>
+                    router.push(
+                      `/sites/${encodeURIComponent(activeVilla.slug)}`
+                    )
+                  }
+                  className="group inline-flex items-center justify-center gap-2 rounded-2xl border border-[#bd9254]/35 bg-gradient-to-b from-[#bd9254]/22 to-[#bd9254]/10 px-4 py-3 text-sm font-semibold text-white shadow-[0_16px_50px_-24px_rgba(189,146,84,0.55)] hover:border-[#bd9254]/55 hover:from-[#bd9254]/26 hover:to-[#bd9254]/12"
+                >
+                  Voir la villa
+                  <ExternalLink className="h-4 w-4 text-white/85 transition-transform group-hover:translate-x-0.5" />
+                </button>
+
+               
+              </div>
             </div>
           </motion.div>
         ) : null}
       </AnimatePresence>
+
+      {/* Marker styles (self-contained) */}
+      <style jsx global>{`
+        .chalet-marker {
+          width: 14px;
+          height: 14px;
+          border-radius: 9999px;
+          position: relative;
+          transform: scale(0.72);
+          opacity: 0;
+          transition:
+            transform 220ms ease,
+            opacity 220ms ease,
+            filter 220ms ease;
+          cursor: pointer;
+          outline: none;
+        }
+
+        .chalet-marker.is-visible {
+          opacity: 1;
+          transform: scale(1);
+        }
+
+        .chalet-marker::before {
+          content: "";
+          position: absolute;
+          inset: -8px;
+          border-radius: 9999px;
+          background: rgba(189, 146, 84, 0.18);
+          filter: blur(0px);
+          opacity: 0.9;
+          transform: scale(0.65);
+          transition:
+            transform 220ms ease,
+            opacity 220ms ease;
+        }
+
+        .chalet-marker::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          border-radius: 9999px;
+          background: rgba(189, 146, 84, 0.95);
+          box-shadow:
+            0 10px 28px rgba(0, 0, 0, 0.35),
+            0 0 0 4px rgba(255, 255, 255, 0.35);
+          transition:
+            transform 220ms ease,
+            box-shadow 220ms ease;
+        }
+
+        .chalet-marker:hover,
+        .chalet-marker:focus-visible {
+          filter: brightness(1.08);
+        }
+
+        .chalet-marker:hover::before,
+        .chalet-marker:focus-visible::before {
+          transform: scale(1);
+          opacity: 1;
+        }
+
+        .chalet-marker.is-active::after {
+          transform: scale(1.08);
+          box-shadow:
+            0 16px 34px rgba(0, 0, 0, 0.45),
+            0 0 0 5px rgba(255, 255, 255, 0.45);
+        }
+
+        .chalet-marker.is-active::before {
+          transform: scale(1.08);
+          opacity: 1;
+        }
+      `}</style>
     </section>
   );
 }
