@@ -716,43 +716,6 @@ export function FranceChaletMap({ villas }: Props) {
       </motion.div>
 
       {/* Breadcrumb (desktop only) */}
-      <AnimatePresence>
-        {activeVilla && breadcrumbPath ? (
-          <motion.svg
-            key="breadcrumb"
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 z-20 hidden md:block"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
-          >
-            <motion.path
-              d={breadcrumbPath}
-              fill="none"
-              stroke="rgba(189, 146, 84, 0.55)"
-              strokeWidth="6"
-              strokeLinecap="round"
-              style={{ filter: "blur(4px)" }}
-              initial={{ pathLength: 0 }}
-              animate={{ pathLength: 1 }}
-              exit={{ pathLength: 0 }}
-              transition={{ duration: 0.32, ease: "easeOut" }}
-            />
-            <motion.path
-              d={breadcrumbPath}
-              fill="none"
-              stroke="rgba(255, 255, 255, 0.30)"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              initial={{ pathLength: 0 }}
-              animate={{ pathLength: 1 }}
-              exit={{ pathLength: 0 }}
-              transition={{ duration: 0.34, ease: "easeOut", delay: 0.02 }}
-            />
-          </motion.svg>
-        ) : null}
-      </AnimatePresence>
 
       {/* Card */}
       <AnimatePresence mode="wait">
@@ -767,8 +730,8 @@ export function FranceChaletMap({ villas }: Props) {
               "absolute z-30",
               "w-[min(392px,calc(100vw-2rem))]",
               "max-h-[calc(100vh-2rem)]",
-              "overflow-hidden rounded-3xl",
-              "border border-white/12 bg-black/40",
+              "overflow-hidden rounded-xl",
+              "border border-white/12 bg-black/50",
               "shadow-[0_26px_90px_-28px_rgba(0,0,0,0.85)] backdrop-blur-2xl",
             ].join(" ")}
             initial={{ opacity: 0, y: 10, scale: 0.94, filter: "blur(8px)" }}
@@ -796,7 +759,7 @@ export function FranceChaletMap({ villas }: Props) {
                   <div className="absolute inset-0 bg-gradient-to-br from-white/10 via-white/5 to-transparent" />
                 )}
 
-                <button
+                {/* <button
                   type="button"
                   onClick={() => {
                     setActiveId(null);
@@ -807,7 +770,7 @@ export function FranceChaletMap({ villas }: Props) {
                   aria-label="Fermer"
                 >
                   <X className="h-4 w-4" />
-                </button>
+                </button> */}
 
                 <div className="absolute bottom-0 left-0 right-0 p-4">
                   <p className="text-[50px] font-thin tracking-tight text-white">
@@ -819,6 +782,48 @@ export function FranceChaletMap({ villas }: Props) {
                       activeVilla.country ||
                       "—"}
                   </p>
+                  <div className="flex gap-2">
+                    <div className="flex items-center rounded-2xl border border-white/10 bg-white/5 p-3">
+                      <div className="flex items-center justify-center gap-2 text-[30px] text-white/55">
+                        <Users className="h-5 w-5 font-light text-white" />
+                        <div className="mt-1 text-sm font-semibold text-white">
+                          {typeof activeVilla.maxGuests === "number"
+                            ? activeVilla.maxGuests
+                            : "—"}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center rounded-2xl border border-white/10 bg-white/5 p-3">
+                      <div className="flex items-center justify-center gap-2 text-[30px] text-white/55">
+                        <BedDouble className="h-5 w-5 text-white" />
+                        <div className="mt-1 text-sm font-semibold text-white">
+                          {typeof activeVilla.bedrooms === "number"
+                            ? activeVilla.bedrooms
+                            : "—"}
+                        </div>
+                      </div>
+                    </div>
+                  <div className="flex items-center rounded-2xl border border-white/10 bg-white/5 p-3">
+                      <div className="flex items-center justify-center gap-2 text-[30px] text-white/55">
+                        <Bath className="h-5 w-5 text-white" />
+                        <div className="mt-1 text-sm font-semibold text-white">
+                          {typeof activeVilla.bathrooms === "number"
+                            ? activeVilla.bathrooms
+                            : "—"}
+                        </div>
+                      </div>
+                    </div>
+                        <div className="flex items-center rounded-2xl border border-white/10 bg-white/5 p-3">
+                      <div className="flex items-center justify-center gap-2 text-[30px] text-white/55">
+                    <Ruler className="h-5 w-5 text-white" />
+                    <div className="mt-1 text-sm font-semibold text-white">
+                      {typeof activeVilla.surface === "number"
+                        ? `${activeVilla.surface} m²`
+                        : "—"}
+                    </div>
+                  </div>
+                </div>
+                  </div>
                 </div>
               </div>
 
@@ -827,51 +832,7 @@ export function FranceChaletMap({ villas }: Props) {
 
             {/* Content */}
             <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-              <div className="grid grid-cols-4 gap-2 mt-2">
-                <div className="flex items-center rounded-2xl border border-white/10 bg-white/5 p-3">
-                  <div className="flex items-center justify-center gap-2 text-[30px] text-white/55">
-                    <Users className="h-8 w-8 text-white" />
-                    <div className="mt-1 text-sm font-semibold text-white">
-                      {typeof activeVilla.maxGuests === "number"
-                        ? activeVilla.maxGuests
-                        : "—"}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                  <div className="flex items-center justify-center gap-2 text-[30px] text-white/55">
-                    <BedDouble className="h-8 w-8 text-white" />
-                    <div className="mt-1 text-sm font-semibold text-white">
-                      {typeof activeVilla.bedrooms === "number"
-                        ? activeVilla.bedrooms
-                        : "—"}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-3 ">
-                  <div className="flex items-center justify-center gap-2 text-[30px] text-white/55">
-                    <Bath className="h-8 w-8 text-white" />
-                    <div className="mt-1 text-sm font-semibold text-white">
-                      {typeof activeVilla.bathrooms === "number"
-                        ? activeVilla.bathrooms
-                        : "—"}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                  <div className="flex items-center justify-center gap-2 text-[30px] text-white/55">
-                    <Ruler className="h-8 w-8 text-white" />
-                    <div className="mt-1 text-sm font-semibold text-white">
-                      {typeof activeVilla.surface === "number"
-                        ? `${activeVilla.surface} m²`
-                        : "—"}
-                    </div>
-                  </div>
-                </div>
-              </div>
+           
 
               {amenityBadges.length ? (
                 <div className="mt-2 grid grid-cols-4 gap-2">
@@ -906,8 +867,6 @@ export function FranceChaletMap({ villas }: Props) {
                   Voir la villa
                   <ExternalLink className="h-4 w-4 text-white/85 transition-transform group-hover:translate-x-0.5" />
                 </button>
-
-               
               </div>
             </div>
           </motion.div>
