@@ -1,117 +1,75 @@
 // app/page.tsx
-import Link from "next/link";
-import Image from "next/image";
-import { client } from "../sanity/lib/client";
+import type { Metadata } from "next";
+import HomeClient from "./_components/HomeClient";
 
-export const revalidate = 60;
+const siteUrl = "https://careconciergeluxury.com";
 
-type VillaCard = {
-  _id: string;
-  name: string;
-  slug: string;
-  region: string;
-  country: string;
-  ownerName?: string;
-  shortDescription?: string;
-  heroImageUrl?: string;
-  heroImageAlt?: string;
+export const metadata: Metadata = {
+  title: "Gestion locative & conciergerie de luxe | Megève - Chamonix | Care Concierge Luxury",
+  description:
+    "Gestion locative haut de gamme et conciergerie privée pour villas et chalets d’exception à Megève, Chamonix et Haute-Savoie. Propriétaires et voyageurs premium.",
+  alternates: { canonical: siteUrl },
+  openGraph: {
+    type: "website",
+    url: siteUrl,
+    title: "Gestion locative & conciergerie de luxe | Care Concierge Luxury",
+    description:
+      "Services luxe pour family offices, propriétaires et voyageurs premium : gestion locative, conciergerie, expériences sur-mesure.",
+    images: [
+      {
+        url: `${siteUrl}/og/home.jpg`,
+        width: 1200,
+        height: 630,
+        alt: "Villa de luxe dans les Alpes",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Care Concierge Luxury",
+    description:
+      "Gestion locative haut de gamme et conciergerie privée pour villas et chalets d’exception.",
+    images: [`${siteUrl}/og/home.jpg`],
+  },
 };
 
-async function getVillas(): Promise<VillaCard[]> {
-  const query = `
-    *[_type == "villa" && defined(slug.current)] | order(name asc) {
-      _id,
-      name,
-      region,
-      country,
-      "slug": slug.current,
-      "ownerName": ownerSite->ownerName,
-      shortDescription,
+export default function Page() {
+  const organizationLd = {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    name: "Care Concierge Luxury",
+    url: siteUrl,
+    logo: `${siteUrl}/logo.png`,
+    sameAs: [
+      // Remplacer par vos URLs réelles
+      "https://www.instagram.com/",
+      "https://www.linkedin.com/",
+      "https://www.facebook.com/",
+    ],
+    areaServed: ["Megève", "Chamonix", "Saint-Gervais-les-Bains", "Haute-Savoie"],
+    serviceType: ["Rental Management", "Concierge", "Property Management"],
+  };
 
-      "heroImageUrl": coalesce(heroImage.asset->url, gallery[0].asset->url),
-      "heroImageAlt": coalesce(heroImage.alt, gallery[0].alt, name)
-    }
-  `;
-  return client.fetch<VillaCard[]>(query);
-}
-
-export default async function HomePage() {
-  const villas = await getVillas();
+  const localBusinessLd = {
+    "@context": "https://schema.org",
+    "@type": "LocalBusiness",
+    name: "Care Concierge Luxury",
+    url: siteUrl,
+    image: `${siteUrl}/og/home.jpg`,
+    priceRange: "€€€",
+    areaServed: ["Megève", "Chamonix", "Haute-Savoie"],
+    // address: { ... } // Optionnel si vous avez une adresse publique
+  };
 
   return (
-    <div className="flex flex-col gap-8">
-      <section className="space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-          Portail des sites propriétaires
-        </h1>
-        <p className="max-w-xl text-sm text-slate-600">
-          Chaque propriétaire dispose d’une landing page dédiée pour présenter sa villa.
-          Cette page rassemble toutes les fiches actives.
-        </p>
-      </section>
-
-      <section className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-        {villas.map((villa) => (
-          <article
-            key={villa._id}
-            className="flex min-h-80 flex-col overflow-hidden rounded-2xl bg-white shadow-lg shadow-slate-900/10 transition hover:-translate-y-1 hover:shadow-2xl"
-          >
-            <div className="relative h-44 w-full">
-              {villa.heroImageUrl ? (
-                <Image
-                  src={villa.heroImageUrl}
-                  alt={villa.heroImageAlt || villa.name}
-                  fill
-                  unoptimized
-                  className="object-cover"
-                  sizes="(min-width: 1024px) 33vw, 100vw"
-                />
-              ) : (
-                <div className="h-full w-full bg-linear-to-br from-slate-900 via-slate-700 to-slate-500" />
-              )}
-            </div>
-
-            <div className="flex flex-1 flex-col px-4 pb-3 pt-3">
-              <div className="mb-1 flex items-baseline justify-between gap-3">
-                <h2 className="truncate text-sm font-semibold text-slate-900">
-                  {villa.name}
-                </h2>
-                <span className="text-[0.65rem] font-medium uppercase tracking-[0.16em] text-slate-400">
-                  {villa.region} · {villa.country}
-                </span>
-              </div>
-
-              {villa.ownerName ? (
-                <p className="mb-1 text-[0.7rem] text-slate-500">
-                  Propriétaire&nbsp;: {villa.ownerName}
-                </p>
-              ) : null}
-
-              {villa.shortDescription ? (
-                <p className="line-clamp-4 text-xs text-slate-600">
-                  {villa.shortDescription}
-                </p>
-              ) : null}
-            </div>
-
-            <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-4 py-3">
-              <Link
-                href={`/sites/${villa.slug}`}
-                className="inline-flex items-center justify-center rounded-full bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-black"
-              >
-                Ouvrir la landing
-              </Link>
-
-              <Link
-                href={`/dashboard/${villa.slug}`}
-                className="text-[0.7rem] font-medium text-slate-500 hover:text-slate-900"
-              >
-                Accéder au dashboard →
-              </Link>
-            </div>
-          </article>
-        ))}
-      </section>
-    </div>
+    <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify([organizationLd, localBusinessLd]),
+        }}
+      />
+      <HomeClient />
+    </>
   );
 }

@@ -1,10 +1,22 @@
 // app/carte/FranceChaletMap.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import mapboxgl from "mapbox-gl";
-import { Bath, ExternalLink, MapPin, Ruler, Users } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  Bath,
+  BedDouble,
+  CloudFog,
+  ExternalLink,
+  Film,
+  Flame,
+  Ruler,
+  Sparkles,
+  Users,
+  Waves,
+} from "lucide-react";
 import type { VillaMapPoint } from "./type";
 
 type Props = {
@@ -21,8 +33,15 @@ const FRANCE_BOUNDS: mapboxgl.LngLatBoundsLike = [
 const OVERLAP_THRESHOLD_PX = 34;
 const MARKER_SAFE_DIAMETER_PX = 38;
 
+const CARD_FALLBACK_WIDTH = 360;
+const CARD_FALLBACK_HEIGHT = 380;
+
 function easeOutCubic(t: number) {
   return 1 - Math.pow(1 - t, 3);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function truncate(value: string, maxChars: number) {
@@ -79,15 +98,11 @@ function computeMarkerOffsets(map: mapboxgl.Map, pts: VillaMapPoint[]) {
       continue;
     }
 
-    // Stable ordering for deterministic offsets
     indices.sort((a, b) => projected[a].villa.slug.localeCompare(projected[b].villa.slug));
 
     const n = indices.length;
     const denom = 2 * Math.sin(Math.PI / n);
-    const radius =
-      denom > 0
-        ? Math.min(72, Math.max(18, Math.ceil(MARKER_SAFE_DIAMETER_PX / denom)))
-        : 28;
+    const radius = denom > 0 ? Math.min(72, Math.max(18, Math.ceil(MARKER_SAFE_DIAMETER_PX / denom))) : 28;
 
     const startAngle = -Math.PI / 2;
     for (let idx = 0; idx < n; idx++) {
@@ -102,17 +117,123 @@ function computeMarkerOffsets(map: mapboxgl.Map, pts: VillaMapPoint[]) {
   return offsets;
 }
 
+const AMENITY_PRESETS = [
+  { key: "jacuzzi", label: "Jacuzzi", Icon: Sparkles, match: ["jacuzzi", "spa", "hot tub", "bain bouillonnant"] },
+  { key: "sauna", label: "Sauna", Icon: Flame, match: ["sauna"] },
+  { key: "piscine", label: "Piscine", Icon: Waves, match: ["piscine", "pool"] },
+  { key: "hammam", label: "Hammam", Icon: CloudFog, match: ["hammam", "steam"] },
+  { key: "cinema", label: "Cinéma", Icon: Film, match: ["cinema", "home cinema", "salle cinema", "movie"] },
+] as const;
+
+function resolveAmenityBadges(amenities?: string[]) {
+  const normalized = (amenities ?? [])
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.toLowerCase());
+
+  return AMENITY_PRESETS.filter((preset) =>
+    preset.match.some((needle) => normalized.some((value) => value.includes(needle)))
+  );
+}
+
+function toOffsetTuple(offset?: mapboxgl.PointLike): [number, number] {
+  if (!offset) return [0, 0];
+  if (Array.isArray(offset)) {
+    const [x, y] = offset;
+    return [typeof x === "number" ? x : 0, typeof y === "number" ? y : 0];
+  }
+  if (typeof offset === "object" && "x" in offset && "y" in offset) {
+    const x = (offset as { x: unknown }).x;
+    const y = (offset as { y: unknown }).y;
+    return [typeof x === "number" ? x : 0, typeof y === "number" ? y : 0];
+  }
+  return [0, 0];
+}
+
+type CardPlacement = {
+  x: number;
+  y: number;
+  side: "left" | "right";
+};
+
+type Breadcrumb = {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+};
+
+function computeCardPlacement(
+  rootSize: { width: number; height: number },
+  anchor: { x: number; y: number },
+  cardSize: { width: number; height: number }
+): CardPlacement {
+  const margin = 18;
+  const gap = 16;
+  const width = Math.min(cardSize.width, Math.max(240, rootSize.width - margin * 2));
+  const height = Math.min(cardSize.height, Math.max(260, rootSize.height - margin * 2));
+
+  const canPlaceRight = anchor.x + gap + width + margin <= rootSize.width;
+  const canPlaceLeft = anchor.x - gap - width - margin >= 0;
+
+  const side: CardPlacement["side"] = canPlaceRight || !canPlaceLeft ? "right" : "left";
+  const rawX = side === "right" ? anchor.x + gap : anchor.x - gap - width;
+  const rawY = anchor.y - height * 0.28;
+
+  const x = clamp(rawX, margin, rootSize.width - width - margin);
+  const y = clamp(rawY, margin, rootSize.height - height - margin);
+
+  return { x, y, side };
+}
+
 export function FranceChaletMap({ villas }: Props) {
   const router = useRouter();
   const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
+  const rootRef = useRef<HTMLElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const cardRef = useRef<HTMLDivElement | null>(null);
+
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<mapboxgl.Marker[]>([]);
+  const offsetsRef = useRef<Map<string, mapboxgl.PointLike>>(new Map());
+
+  const hoverClearTimeoutRef = useRef<number | null>(null);
+  const activeIdRef = useRef<string | null>(null);
 
   const [isReady, setIsReady] = useState(false);
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const [isListOpen, setIsListOpen] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [cardPos, setCardPos] = useState<CardPlacement | null>(null);
+  const [breadcrumb, setBreadcrumb] = useState<Breadcrumb | null>(null);
+
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
+  const cancelHoverClear = useCallback(() => {
+    if (hoverClearTimeoutRef.current) {
+      window.clearTimeout(hoverClearTimeoutRef.current);
+      hoverClearTimeoutRef.current = null;
+    }
+  }, []);
+
+  const activateVilla = useCallback(
+    (id: string) => {
+      cancelHoverClear();
+      setActiveId(id);
+    },
+    [cancelHoverClear]
+  );
+
+  const scheduleHoverClear = useCallback(
+    (id: string) => {
+      cancelHoverClear();
+      hoverClearTimeoutRef.current = window.setTimeout(() => {
+        if (activeIdRef.current !== id) return;
+        setActiveId(null);
+        setCardPos(null);
+        setBreadcrumb(null);
+      }, 170);
+    },
+    [cancelHoverClear]
+  );
 
   const points = useMemo(
     () =>
@@ -127,27 +248,33 @@ export function FranceChaletMap({ villas }: Props) {
     [villas]
   );
 
-  const sortedPoints = useMemo(() => {
-    const copy = [...points];
-    copy.sort((a, b) => {
-      const aCity = a.city || a.region || "";
-      const bCity = b.city || b.region || "";
-      return aCity.localeCompare(bCity) || a.name.localeCompare(b.name);
-    });
-    return copy;
-  }, [points]);
-
-  const previewVilla = useMemo(() => {
-    if (!sortedPoints.length) return null;
-    if (hoveredId) return sortedPoints.find((v) => v._id === hoveredId) ?? sortedPoints[0];
-    return sortedPoints[0];
-  }, [sortedPoints, hoveredId]);
+  const activeVilla = useMemo(() => {
+    if (!activeId) return null;
+    return points.find((villa) => villa._id === activeId) ?? null;
+  }, [points, activeId]);
 
   const prefersReducedMotion = useMemo(() => {
     if (typeof window === "undefined") return false;
-    return (
-      window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false
+    return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+  }, []);
+
+  const primeOverlayFromMarkerEl = useCallback((el: HTMLDivElement) => {
+    const root = rootRef.current;
+    if (!root) return;
+    const rootRect = root.getBoundingClientRect();
+    const rect = el.getBoundingClientRect();
+    const anchor = {
+      x: rect.left - rootRect.left + rect.width / 2,
+      y: rect.top - rootRect.top + rect.height / 2,
+    };
+    setCardPos(
+      computeCardPlacement(
+        { width: rootRect.width, height: rootRect.height },
+        anchor,
+        { width: CARD_FALLBACK_WIDTH, height: CARD_FALLBACK_HEIGHT }
+      )
     );
+    setBreadcrumb(null);
   }, []);
 
   useEffect(() => {
@@ -161,7 +288,6 @@ export function FranceChaletMap({ villas }: Props) {
 
     let cancelled = false;
 
-    // ✅ Helpers déclarés AVANT usage (plus d'erreur ESLint)
     function clearMarkers() {
       markersRef.current.forEach((m) => m.remove());
       markersRef.current = [];
@@ -171,19 +297,28 @@ export function FranceChaletMap({ villas }: Props) {
       clearMarkers();
 
       const offsets = computeMarkerOffsets(map, pts);
+      offsetsRef.current = offsets;
+
       const newMarkers: mapboxgl.Marker[] = [];
 
-      pts.forEach((v, idx) => {
+      pts.forEach((villa, idx) => {
         const el = document.createElement("div");
         el.className = "chalet-marker";
-        const offset = offsets.get(v._id) ?? [0, 0];
+        el.dataset.villaId = villa._id;
+        const offset = offsets.get(villa._id) ?? [0, 0];
 
         el.setAttribute("role", "button");
         el.setAttribute("tabindex", "0");
-        el.setAttribute("aria-label", `Ouvrir ${v.name}`);
+        el.setAttribute("aria-label", `Ouvrir ${villa.name}`);
 
-        const handleEnter = () => setHoveredId(v._id);
-        const handleLeave = () => setHoveredId((prev) => (prev === v._id ? null : prev));
+        const handleEnter = () => {
+          el.classList.add("is-active");
+          primeOverlayFromMarkerEl(el);
+          activateVilla(villa._id);
+        };
+        const handleLeave = () => {
+          scheduleHoverClear(villa._id);
+        };
 
         el.addEventListener("mouseenter", handleEnter);
         el.addEventListener("mouseleave", handleLeave);
@@ -193,17 +328,17 @@ export function FranceChaletMap({ villas }: Props) {
         el.addEventListener("click", (e) => {
           e.preventDefault();
           e.stopPropagation();
-          router.push(`/sites/${encodeURIComponent(v.slug)}`);
+          router.push(`/sites/${encodeURIComponent(villa.slug)}`);
         });
 
         el.addEventListener("keydown", (e) => {
           if (e.key !== "Enter" && e.key !== " ") return;
           e.preventDefault();
-          router.push(`/sites/${encodeURIComponent(v.slug)}`);
+          router.push(`/sites/${encodeURIComponent(villa.slug)}`);
         });
 
         const marker = new mapboxgl.Marker({ element: el, anchor: "center", offset })
-          .setLngLat([v.lng, v.lat])
+          .setLngLat([villa.lng, villa.lat])
           .addTo(map);
 
         window.setTimeout(() => el.classList.add("is-visible"), 220 + idx * 110);
@@ -214,14 +349,9 @@ export function FranceChaletMap({ villas }: Props) {
       markersRef.current = newMarkers;
     }
 
-    function zoomToPointsThenReveal(
-      map: mapboxgl.Map,
-      pts: VillaMapPoint[],
-      instant: boolean
-    ) {
+    function zoomToPointsThenReveal(map: mapboxgl.Map, pts: VillaMapPoint[], instant: boolean) {
       if (!pts.length) return;
 
-      // 1 point => évite un fitBounds trop agressif
       if (pts.length === 1) {
         const p = pts[0];
         map.easeTo({
@@ -277,10 +407,7 @@ export function FranceChaletMap({ villas }: Props) {
 
     mapRef.current = map;
 
-    map.addControl(
-      new mapboxgl.NavigationControl({ visualizePitch: true }),
-      "top-right"
-    );
+    map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), "top-right");
 
     const resizeObserver = new ResizeObserver(() => {
       try {
@@ -292,7 +419,6 @@ export function FranceChaletMap({ villas }: Props) {
     map.on("load", () => {
       if (cancelled) return;
 
-      // Terrain optionnel
       try {
         map.addSource("mapbox-dem", {
           type: "raster-dem",
@@ -323,192 +449,310 @@ export function FranceChaletMap({ villas }: Props) {
 
     return () => {
       cancelled = true;
+      cancelHoverClear();
       clearMarkers();
       resizeObserver.disconnect();
       map.remove();
       mapRef.current = null;
     };
-  }, [token, points, prefersReducedMotion, router]);
+  }, [activateVilla, cancelHoverClear, points, prefersReducedMotion, primeOverlayFromMarkerEl, router, scheduleHoverClear, token]);
+
+  useEffect(() => {
+    markersRef.current.forEach((marker) => {
+      const el = marker.getElement() as HTMLDivElement;
+      const id = el.dataset.villaId;
+      if (!id) return;
+      el.classList.toggle("is-active", id === activeId);
+    });
+  }, [activeId]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const root = rootRef.current;
+    const container = containerRef.current;
+    if (!activeVilla || !map || !root || !container) return;
+
+    let raf: number | null = null;
+    let retryTimeout: number | null = null;
+
+    const update = () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      raf = window.requestAnimationFrame(() => {
+        const card = cardRef.current;
+        if (!card) {
+          if (!retryTimeout) retryTimeout = window.setTimeout(update, 40);
+          return;
+        }
+
+        const rootRect = root.getBoundingClientRect();
+        const mapRect = container.getBoundingClientRect();
+        const cardRect = card.getBoundingClientRect();
+
+        const projected = map.project([activeVilla.lng, activeVilla.lat]);
+        const [ox, oy] = toOffsetTuple(offsetsRef.current.get(activeVilla._id));
+
+        const anchorX = mapRect.left - rootRect.left + projected.x + ox;
+        const anchorY = mapRect.top - rootRect.top + projected.y + oy;
+
+        const placement = computeCardPlacement(
+          { width: rootRect.width, height: rootRect.height },
+          { x: anchorX, y: anchorY },
+          { width: cardRect.width, height: cardRect.height }
+        );
+
+        setCardPos((prev) => {
+          if (
+            prev &&
+            prev.side === placement.side &&
+            Math.abs(prev.x - placement.x) < 0.5 &&
+            Math.abs(prev.y - placement.y) < 0.5
+          ) {
+            return prev;
+          }
+          return placement;
+        });
+
+        const endX = placement.side === "right" ? placement.x : placement.x + cardRect.width;
+        const endY = placement.y + Math.min(170, cardRect.height * 0.32);
+
+        setBreadcrumb((prev) => {
+          if (
+            prev &&
+            Math.abs(prev.start.x - anchorX) < 0.5 &&
+            Math.abs(prev.start.y - anchorY) < 0.5 &&
+            Math.abs(prev.end.x - endX) < 0.5 &&
+            Math.abs(prev.end.y - endY) < 0.5
+          ) {
+            return prev;
+          }
+          return { start: { x: anchorX, y: anchorY }, end: { x: endX, y: endY } };
+        });
+      });
+    };
+
+    const ro = new ResizeObserver(update);
+    if (cardRef.current) ro.observe(cardRef.current);
+
+    update();
+    map.on("move", update);
+    window.addEventListener("resize", update);
+
+    return () => {
+      map.off("move", update);
+      window.removeEventListener("resize", update);
+      ro.disconnect();
+      if (retryTimeout) window.clearTimeout(retryTimeout);
+      if (raf) window.cancelAnimationFrame(raf);
+    };
+  }, [activeVilla]);
+
+  const breadcrumbPath = useMemo(() => {
+    if (!breadcrumb) return "";
+    const { start, end } = breadcrumb;
+    const dir = end.x >= start.x ? 1 : -1;
+    const dx = Math.max(110, Math.min(240, Math.abs(end.x - start.x) * 0.55));
+    return `M ${start.x} ${start.y} C ${start.x + dir * dx} ${start.y}, ${end.x - dir * dx} ${end.y}, ${end.x} ${end.y}`;
+  }, [breadcrumb]);
+
+  const safeCardPos = cardPos ?? { x: 18, y: 18, side: "right" as const };
+  const transformOrigin = safeCardPos.side === "right" ? "0% 20%" : "100% 20%";
 
   return (
-    <section className="relative h-full w-full overflow-hidden bg-black md:rounded-3xl">
-      <div ref={containerRef} className="h-full w-full" />
+    <section ref={rootRef} className="relative h-full w-full overflow-hidden bg-slate-950">
+      <div ref={containerRef} className="absolute inset-0" />
 
-      <div className="pointer-events-none absolute left-4 top-4 rounded-2xl bg-black/45 px-3 py-2 text-xs text-white ring-1 ring-white/10 backdrop-blur">
-        <div className="font-medium">Carte</div>
-        <div className="text-white/70">
-          {isReady ? `${points.length} villas · survol = aperçu · clic = ouvrir` : "Animation…"}
-        </div>
-      </div>
+      <AnimatePresence>
+        {!activeVilla ? (
+          <motion.div
+            key="hud"
+            aria-hidden="true"
+            className="pointer-events-none absolute left-5 top-5 z-20 max-w-[min(420px,calc(100vw-2.5rem))] rounded-3xl border border-white/10 bg-black/35 px-4 py-3 text-white shadow-2xl shadow-black/40 backdrop-blur"
+            initial={{ opacity: 0, y: 12, scale: 0.99 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.99 }}
+            transition={{ duration: 0.25, ease: "easeOut" }}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/60">Carte interactive</p>
+                <p className="mt-1 text-sm font-semibold text-white">
+                  {isReady ? `${points.length} villas` : "Calibration…"}
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-white/70">Survolez un point pour verrouiller une fiche.</p>
+              </div>
+              <div className="rounded-2xl bg-white/5 px-3 py-2 text-[11px] text-white/70 ring-1 ring-white/10">
+                HUD
+              </div>
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
 
-      {/* Mobile toggle */}
-      <div className="absolute bottom-4 left-4 z-10 md:hidden">
-        <button
-          type="button"
-          onClick={() => setIsListOpen((v) => !v)}
-          className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-950 shadow-lg shadow-black/20"
-        >
-          <MapPin className="h-4 w-4" />
-          {isListOpen ? "Masquer la liste" : "Liste des villas"}
-        </button>
-      </div>
+      <AnimatePresence>
+        {activeVilla && breadcrumbPath ? (
+          <motion.svg
+            key="breadcrumb"
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-20 hidden md:block"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+          >
+            <motion.path
+              d={breadcrumbPath}
+              fill="none"
+              stroke="rgba(189, 146, 84, 0.55)"
+              strokeWidth="5"
+              strokeLinecap="round"
+              style={{ filter: "blur(4px)" }}
+              initial={{ pathLength: 0 }}
+              animate={{ pathLength: 1 }}
+              exit={{ pathLength: 0 }}
+              transition={{ duration: 0.32, ease: "easeOut" }}
+            />
+            <motion.path
+              d={breadcrumbPath}
+              fill="none"
+              stroke="rgba(255, 255, 255, 0.36)"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              initial={{ pathLength: 0 }}
+              animate={{ pathLength: 1 }}
+              exit={{ pathLength: 0 }}
+              transition={{ duration: 0.34, ease: "easeOut", delay: 0.02 }}
+            />
+          </motion.svg>
+        ) : null}
+      </AnimatePresence>
 
-      {/* Desktop properties panel */}
-      <aside className="absolute right-4 top-4 z-10 hidden max-h-[calc(100%-2rem)] w-[360px] overflow-hidden rounded-3xl bg-white/10 ring-1 ring-white/15 backdrop-blur-xl md:block">
-        <div className="flex h-full flex-col">
-          <div className="border-b border-white/10 px-5 py-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/70">Propriétés</p>
-            <p className="mt-1 text-sm text-white/80">{sortedPoints.length} villas</p>
-          </div>
+      <AnimatePresence mode="wait">
+        {activeVilla ? (
+          <motion.div
+            key={activeVilla._id}
+            ref={cardRef}
+            onMouseEnter={cancelHoverClear}
+            onMouseLeave={() => scheduleHoverClear(activeVilla._id)}
+            style={{ left: safeCardPos.x, top: safeCardPos.y, transformOrigin }}
+            className="absolute z-30 w-[360px] max-w-[calc(100vw-2.5rem)] overflow-hidden rounded-3xl border border-white/10 bg-slate-950/55 shadow-[0_38px_90px_rgba(0,0,0,0.55)] ring-1 ring-white/10 backdrop-blur-xl"
+            initial={{ opacity: 0, y: 12, scale: 0.92, filter: "blur(6px)" }}
+            animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
+            exit={{ opacity: 0, y: 10, scale: 0.97, filter: "blur(6px)" }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+          >
+            <div className="relative">
+              <div className="absolute inset-x-0 top-0 h-[2px] bg-[linear-gradient(90deg,transparent,rgba(189,146,84,0.85),transparent)]" />
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.10),transparent_55%)] opacity-60" />
+              <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(transparent_0%,rgba(255,255,255,0.06)_50%,transparent_100%)] bg-[length:100%_10px] opacity-[0.08]" />
 
-          <div className="p-5">
-            {previewVilla ? (
-              <div className="overflow-hidden rounded-2xl bg-black/25 ring-1 ring-white/10">
-                {previewVilla.imageUrl ? (
-                  <div className="relative aspect-16/10 w-full overflow-hidden bg-black/40">
-                    <div
-                      aria-hidden="true"
-                      className="absolute inset-0 bg-cover bg-center"
-                      style={{ backgroundImage: `url(${previewVilla.imageUrl})` }}
-                    />
-                    <div className="absolute inset-0 bg-linear-to-t from-black/70 via-black/10 to-transparent" />
-                    <div className="absolute bottom-0 left-0 right-0 p-4">
-                      <p className="text-sm font-semibold text-white">{previewVilla.name}</p>
-                      <p className="mt-1 text-xs text-white/70">
-                        {previewVilla.city || previewVilla.region || previewVilla.country || "—"}
+              {activeVilla.imageUrl ? (
+                <div className="relative aspect-[16/10] w-full overflow-hidden bg-black/40">
+                  <img
+                    src={activeVilla.imageUrl}
+                    alt={activeVilla.imageAlt || activeVilla.name}
+                    className="absolute inset-0 h-full w-full object-cover"
+                    loading="lazy"
+                  />
+                  <div className="absolute inset-0 bg-linear-to-t from-black/80 via-black/25 to-transparent" />
+                  <div className="absolute left-0 right-0 top-0 p-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/70">
+                        Target locked
                       </p>
+                      <p className="text-[11px] text-white/65">clic = ouvrir</p>
                     </div>
                   </div>
-                ) : (
-                  <div className="p-4">
-                    <p className="text-sm font-semibold text-white">{previewVilla.name}</p>
+                  <div className="absolute bottom-0 left-0 right-0 p-4">
+                    <p className="text-lg font-semibold tracking-tight text-white">{activeVilla.name}</p>
                     <p className="mt-1 text-xs text-white/70">
-                      {previewVilla.city || previewVilla.region || previewVilla.country || "—"}
+                      {activeVilla.city || activeVilla.region || activeVilla.country || "—"}
                     </p>
                   </div>
-                )}
-
-                <div className="space-y-3 p-4">
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="rounded-xl bg-white/5 p-3 ring-1 ring-white/10">
-                      <div className="flex items-center gap-2 text-xs text-white/70">
-                        <Users className="h-4 w-4" />
-                        Pers.
-                      </div>
-                      <div className="mt-1 text-sm font-semibold text-white">
-                        {typeof previewVilla.maxGuests === "number" ? previewVilla.maxGuests : "—"}
-                      </div>
-                    </div>
-                    <div className="rounded-xl bg-white/5 p-3 ring-1 ring-white/10">
-                      <div className="flex items-center gap-2 text-xs text-white/70">
-                        <Bath className="h-4 w-4" />
-                        SDB
-                      </div>
-                      <div className="mt-1 text-sm font-semibold text-white">
-                        {typeof previewVilla.bathrooms === "number" ? previewVilla.bathrooms : "—"}
-                      </div>
-                    </div>
-                    <div className="rounded-xl bg-white/5 p-3 ring-1 ring-white/10">
-                      <div className="flex items-center gap-2 text-xs text-white/70">
-                        <Ruler className="h-4 w-4" />
-                        m²
-                      </div>
-                      <div className="mt-1 text-sm font-semibold text-white">
-                        {typeof previewVilla.surface === "number" ? previewVilla.surface : "—"}
-                      </div>
-                    </div>
+                </div>
+              ) : (
+                <div className="p-5">
+                  <div className="flex items-center justify-between gap-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/60">Target locked</p>
+                    <p className="text-[11px] text-white/65">clic = ouvrir</p>
                   </div>
-
-                  <p className="text-sm leading-relaxed text-white/80">
-                    {previewVilla.intro ? truncate(previewVilla.intro, 160) : "—"}
+                  <p className="mt-3 text-lg font-semibold tracking-tight text-white">{activeVilla.name}</p>
+                  <p className="mt-1 text-xs text-white/70">
+                    {activeVilla.city || activeVilla.region || activeVilla.country || "—"}
                   </p>
+                </div>
+              )}
+            </div>
 
-                  <button
-                    type="button"
-                    onClick={() => router.push(`/sites/${encodeURIComponent(previewVilla.slug)}`)}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-950 hover:bg-white/90"
-                  >
-                    <ExternalLink className="h-4 w-4" />
-                    Ouvrir la fiche
-                  </button>
+            <div className="space-y-4 p-5">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-2xl bg-white/5 p-3 ring-1 ring-white/10">
+                  <div className="flex items-center gap-2 text-xs text-white/70">
+                    <Users className="h-4 w-4" />
+                    Pers.
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-white">
+                    {typeof activeVilla.maxGuests === "number" ? activeVilla.maxGuests : "—"}
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-white/5 p-3 ring-1 ring-white/10">
+                  <div className="flex items-center gap-2 text-xs text-white/70">
+                    <BedDouble className="h-4 w-4" />
+                    Chambres
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-white">
+                    {typeof activeVilla.bedrooms === "number" ? activeVilla.bedrooms : "—"}
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-white/5 p-3 ring-1 ring-white/10">
+                  <div className="flex items-center gap-2 text-xs text-white/70">
+                    <Bath className="h-4 w-4" />
+                    SDB
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-white">
+                    {typeof activeVilla.bathrooms === "number" ? activeVilla.bathrooms : "—"}
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-white/5 p-3 ring-1 ring-white/10">
+                  <div className="flex items-center gap-2 text-xs text-white/70">
+                    <Ruler className="h-4 w-4" />
+                    m²
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-white">
+                    {typeof activeVilla.surface === "number" ? activeVilla.surface : "—"}
+                  </div>
                 </div>
               </div>
-            ) : (
-              <div className="rounded-2xl bg-white/5 p-4 text-sm text-white/70 ring-1 ring-white/10">
-                Aucune villa géolocalisée.
-              </div>
-            )}
-          </div>
 
-          <div className="min-h-0 flex-1 border-t border-white/10">
-            <div className="max-h-full overflow-y-auto p-3">
-              <div className="space-y-2">
-                {sortedPoints.map((v) => {
-                  const isActive = v._id === previewVilla?._id;
-                  return (
-                    <button
-                      key={v._id}
-                      type="button"
-                      onMouseEnter={() => setHoveredId(v._id)}
-                      onMouseLeave={() => setHoveredId(null)}
-                      onFocus={() => setHoveredId(v._id)}
-                      onBlur={() => setHoveredId(null)}
-                      onClick={() => router.push(`/sites/${encodeURIComponent(v.slug)}`)}
-                      className={[
-                        "w-full rounded-2xl px-3 py-3 text-left transition ring-1 ring-inset",
-                        isActive ? "bg-white/10 ring-white/15" : "bg-white/5 ring-white/10 hover:bg-white/10",
-                      ].join(" ")}
+              {resolveAmenityBadges(activeVilla.amenities).length ? (
+                <div className="flex flex-wrap gap-2">
+                  {resolveAmenityBadges(activeVilla.amenities).map(({ key, label, Icon }) => (
+                    <span
+                      key={key}
+                      className="inline-flex items-center gap-2 rounded-full bg-white/5 px-3 py-1 text-xs font-medium text-white/80 ring-1 ring-white/10"
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-white">{v.name}</p>
-                          <p className="mt-1 text-xs text-white/65">{v.city || v.region || v.country || "—"}</p>
-                        </div>
-                        <span className="text-xs text-white/60">↗</span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
-      </aside>
+                      <Icon className="h-4 w-4 text-white/80" />
+                      {label}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
 
-      {/* Mobile panel */}
-      <aside className={["absolute inset-x-4 bottom-16 z-10 md:hidden", isListOpen ? "block" : "hidden"].join(" ")}>
-        <div className="max-h-[55vh] overflow-hidden rounded-3xl bg-white/10 ring-1 ring-white/15 backdrop-blur-xl">
-          <div className="border-b border-white/10 px-5 py-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/70">Propriétés</p>
-            <p className="mt-1 text-sm text-white/80">{sortedPoints.length} villas</p>
-          </div>
+              {activeVilla.intro ? (
+                <p className="text-sm leading-relaxed text-white/80">{truncate(activeVilla.intro, 180)}</p>
+              ) : null}
 
-          <div className="max-h-[calc(55vh-4rem)] overflow-y-auto p-3">
-            <div className="space-y-2">
-              {sortedPoints.map((v) => (
-                <button
-                  key={v._id}
-                  type="button"
-                  onMouseEnter={() => setHoveredId(v._id)}
-                  onMouseLeave={() => setHoveredId(null)}
-                  onFocus={() => setHoveredId(v._id)}
-                  onBlur={() => setHoveredId(null)}
-                  onClick={() => router.push(`/sites/${encodeURIComponent(v.slug)}`)}
-                  className="w-full rounded-2xl bg-white/5 px-3 py-3 text-left ring-1 ring-inset ring-white/10 hover:bg-white/10"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-white">{v.name}</p>
-                      <p className="mt-1 text-xs text-white/65">{v.city || v.region || v.country || "—"}</p>
-                    </div>
-                    <span className="text-xs text-white/60">↗</span>
-                  </div>
-                </button>
-              ))}
+              <button
+                type="button"
+                onClick={() => router.push(`/sites/${encodeURIComponent(activeVilla.slug)}`)}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-950 hover:bg-white/90"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Ouvrir la fiche
+              </button>
             </div>
-          </div>
-        </div>
-      </aside>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </section>
   );
 }

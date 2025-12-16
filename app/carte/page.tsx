@@ -41,9 +41,12 @@ type VillaForMapDoc = {
   street?: string;
   postalCode?: string;
   maxGuests?: number;
+  bedrooms?: number;
   bathrooms?: number;
   surface?: number;
   shortDescription?: string;
+  keyAmenities?: string[];
+  quickHighlights?: string[];
   imageUrl?: string;
   imageAlt?: string;
   lat?: number;
@@ -144,6 +147,18 @@ export default async function CartePage() {
     }
 
     if (chosen) {
+      const amenitiesRaw = [
+        ...(Array.isArray(doc?.keyAmenities) ? doc.keyAmenities : []),
+        ...(Array.isArray(doc?.quickHighlights) ? doc.quickHighlights : []),
+      ]
+        .filter((x): x is string => typeof x === "string")
+        .map((x) => x.trim())
+        .filter(Boolean);
+
+      const amenities = Array.from(
+        new Map(amenitiesRaw.map((value) => [value.toLowerCase(), value])).values()
+      );
+
       villas.push({
         _id: String(doc?._id || slug),
         name,
@@ -154,7 +169,9 @@ export default async function CartePage() {
         intro: typeof doc?.shortDescription === "string" ? doc.shortDescription : undefined,
         surface: typeof doc?.surface === "number" && Number.isFinite(doc.surface) ? doc.surface : undefined,
         maxGuests: typeof doc?.maxGuests === "number" && Number.isFinite(doc.maxGuests) ? doc.maxGuests : undefined,
+        bedrooms: typeof doc?.bedrooms === "number" && Number.isFinite(doc.bedrooms) ? doc.bedrooms : undefined,
         bathrooms: typeof doc?.bathrooms === "number" && Number.isFinite(doc.bathrooms) ? doc.bathrooms : undefined,
+        amenities: amenities.length ? amenities : undefined,
         imageUrl: typeof doc?.imageUrl === "string" ? doc.imageUrl : undefined,
         imageAlt: typeof doc?.imageAlt === "string" ? doc.imageAlt : undefined,
         lat: chosen.lat,
@@ -168,7 +185,7 @@ export default async function CartePage() {
   // Si aucune villa géolocalisée, on peut rendre un état vide minimal
   if (!villas || villas.length === 0) {
     return (
-      <main className="h-screen w-screen">
+      <main className="h-screen w-screen bg-slate-950 text-white">
         <div className="flex h-full w-full flex-col px-4 py-8 md:px-6">
           <div className="my-auto max-w-3xl">
             <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">Carte interactive</h1>
@@ -183,35 +200,8 @@ export default async function CartePage() {
   }
 
   return (
-    <main className="h-screen w-screen 0">
-      <div className="flex h-full w-full min-h-0 flex-col">
-        <header className="shrink-0 border-b border-white/10 px-4 py-4 md:px-6">
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">Carte interactive</h1>
-              <p className="mt-1 text-sm text-white/70">
-                Animation France → zoom, puis apparition des villas.
-              </p>
-              {skipped.length > 0 ? (
-                <p className="mt-2 text-xs text-white/60">
-                  {skipped.length} villas sans coordonnées (adresse invalide ou token Mapbox manquant).
-                </p>
-              ) : null}
-              {isAdmin ? (
-                <p className="mt-2 text-xs text-white/60">
-                  Mode admin: {token ? "brouillons inclus" : "token Sanity manquant (brouillons non disponibles)"}.
-                </p>
-              ) : null}
-            </div>
-
-            <div className="text-right text-xs text-white/60">{villas.length} villas</div>
-          </div>
-        </header>
-
-        <div className="min-h-0 flex-1">
-          <FranceMapClient villas={villas} />
-        </div>
-      </div>
+    <main className="h-screen w-screen bg-slate-950 text-white">
+      <FranceMapClient villas={villas} />
     </main>
   );
 }

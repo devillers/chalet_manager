@@ -9,7 +9,9 @@ export type VillaMapPoint = {
   intro?: string;
   surface?: number;
   maxGuests?: number;
+  bedrooms?: number;
   bathrooms?: number;
+  amenities?: string[];
   imageUrl?: string;
   imageAlt?: string;
   lat: number;
