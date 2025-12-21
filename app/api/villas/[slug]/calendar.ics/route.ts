@@ -1,5 +1,7 @@
 // app/api/villas/[slug]/calendar.ics/route.ts
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 import { NextResponse } from "next/server";
 import { format } from "date-fns";
@@ -18,6 +20,7 @@ async function getVillaIcalUrlBySlug(slug: string): Promise<string | null> {
   const data = await client.fetch<{ availabilityIcalUrl?: string | null }>(
     query,
     { docType: VILLA_DOC_TYPE, slug },
+    { cache: "no-store" },
   );
 
   return data?.availabilityIcalUrl ?? null;
@@ -25,6 +28,11 @@ async function getVillaIcalUrlBySlug(slug: string): Promise<string | null> {
 
 function asDateValue(d: Date) {
   return format(d, "yyyyMMdd");
+}
+
+function asDtStampUtc(d: Date) {
+  // 2025-01-01T12:34:56.789Z -> 20250101T123456Z
+  return d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
 
 export async function GET(
@@ -35,19 +43,26 @@ export async function GET(
   const { slug } = await Promise.resolve(context.params);
 
   if (!slug) {
-    return new NextResponse("Missing slug", { status: 400 });
+    return new NextResponse("Missing slug", {
+      status: 400,
+      headers: { "Cache-Control": "no-store" },
+    });
   }
 
   const icalUrl = await getVillaIcalUrlBySlug(slug);
-  if (!icalUrl) return new NextResponse("Not found", { status: 404 });
+  if (!icalUrl) {
+    return new NextResponse("Not found", {
+      status: 404,
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
 
   const ranges = await getBlockedRangesFromIcal(icalUrl);
 
-  const now = new Date();
-  const dtstamp = format(now, "yyyyMMdd'T'HHmmss'Z'");
+  const dtstamp = asDtStampUtc(new Date());
 
   const events = ranges
-    .map((r, idx) => {
+    .map((r) => {
       const start = new Date(r.from);
       const endInclusive = new Date(r.to);
 
@@ -55,9 +70,11 @@ export async function GET(
       const endExclusive = new Date(endInclusive);
       endExclusive.setDate(endExclusive.getDate() + 1);
 
+      const uid = `${slug}-${asDateValue(start)}-${asDateValue(endExclusive)}@chalet-manager`;
+
       return [
         "BEGIN:VEVENT",
-        `UID:${slug}-${idx}@chalet-manager`,
+        `UID:${uid}`,
         `DTSTAMP:${dtstamp}`,
         `DTSTART;VALUE=DATE:${asDateValue(start)}`,
         `DTEND;VALUE=DATE:${asDateValue(endExclusive)}`,

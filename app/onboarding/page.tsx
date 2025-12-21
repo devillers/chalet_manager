@@ -3,6 +3,7 @@
 
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
+import { DayPicker, type DayButtonProps } from "react-day-picker";
 import type {
   InputHTMLAttributes,
   ReactNode,
@@ -11,6 +12,19 @@ import type {
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import {
+  addDays,
+  differenceInCalendarDays,
+  endOfMonth,
+  endOfWeek,
+  format,
+  isValid,
+  parseISO,
+  startOfDay,
+  startOfMonth,
+  startOfWeek,
+} from "date-fns";
+import { fr } from "date-fns/locale";
 import { Flame, Waves, Dumbbell, Wind, Wifi, Car } from "lucide-react";
 
 function clampText(txt: string, max = 220) {
@@ -29,6 +43,95 @@ function splitLines(input?: string | null) {
     .split(/\r?\n+/)
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+type PricingMode = "day" | "week" | "month";
+type PricingOverride = { from: string; to: string; nightlyPrice: number };
+type PricingRange = { from: Date; to: Date };
+
+function toYmd(d: Date) {
+  return format(d, "yyyy-MM-dd");
+}
+
+function normalizePricingOverrides(
+  year: number,
+  defaultNightlyPrice: number,
+  overrides: PricingOverride[],
+): PricingOverride[] {
+  if (!Number.isFinite(year) || !Number.isInteger(year)) return [];
+  if (!Number.isFinite(defaultNightlyPrice) || !Number.isInteger(defaultNightlyPrice)) return [];
+
+  const yearStart = startOfDay(new Date(year, 0, 1));
+  const yearEnd = startOfDay(new Date(year, 11, 31));
+  const daysInYear = differenceInCalendarDays(startOfDay(new Date(year + 1, 0, 1)), yearStart);
+  if (!Number.isFinite(daysInYear) || daysInYear <= 0) return [];
+
+  const dayPrices = Array.from({ length: daysInYear }, () => defaultNightlyPrice);
+
+  for (const o of overrides) {
+    const price = Number(o?.nightlyPrice);
+    if (!Number.isFinite(price) || !Number.isInteger(price) || price < 0) continue;
+
+    const fromDate = startOfDay(parseISO(String(o?.from || "")));
+    const toDate = startOfDay(parseISO(String(o?.to || "")));
+    if (!isValid(fromDate) || !isValid(toDate)) continue;
+    if (fromDate > toDate) continue;
+    if (fromDate < yearStart || toDate > yearEnd) continue;
+
+    const fromIdx = differenceInCalendarDays(fromDate, yearStart);
+    const toIdx = differenceInCalendarDays(toDate, yearStart);
+    if (fromIdx < 0 || toIdx >= daysInYear) continue;
+
+    for (let i = fromIdx; i <= toIdx; i++) dayPrices[i] = price;
+  }
+
+  const normalized: PricingOverride[] = [];
+  for (let i = 0; i < dayPrices.length; i++) {
+    const price = dayPrices[i];
+    if (price === defaultNightlyPrice) continue;
+
+    const startIdx = i;
+    while (i + 1 < dayPrices.length && dayPrices[i + 1] === price) i++;
+    const endIdx = i;
+
+    normalized.push({
+      from: toYmd(addDays(yearStart, startIdx)),
+      to: toYmd(addDays(yearStart, endIdx)),
+      nightlyPrice: price,
+    });
+  }
+
+  return normalized;
+}
+
+function computePricingMinMax(defaultNightlyPrice: number, overrides: PricingOverride[]) {
+  if (!Number.isFinite(defaultNightlyPrice) || !Number.isInteger(defaultNightlyPrice)) return null;
+  const prices = [defaultNightlyPrice, ...overrides.map((o) => Number(o.nightlyPrice))].filter((n) =>
+    Number.isFinite(n),
+  );
+  if (!prices.length) return null;
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  return { min, max: max === min ? undefined : max };
+}
+
+function getNightlyPriceForDay(ymd: string, defaultNightlyPrice: number, overrides: PricingOverride[]) {
+  for (const o of overrides) {
+    if (ymd >= o.from && ymd <= o.to) return o.nightlyPrice;
+  }
+  return defaultNightlyPrice;
+}
+
+function sameOverrides(a: PricingOverride[], b: PricingOverride[]) {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const ai = a[i];
+    const bi = b[i];
+    if (!ai || !bi) return false;
+    if (ai.from !== bi.from || ai.to !== bi.to || ai.nightlyPrice !== bi.nightlyPrice) return false;
+  }
+  return true;
 }
 
 function Field({
@@ -95,11 +198,13 @@ const schema = z
     bedrooms: z.number().finite().int().min(1, "≥ 1"),
     bathrooms: z.number().finite().int().min(1, "≥ 1"),
 
-    // Prix & ménage
-    priceMin: z.number().finite().min(0, "≥ 0"),
-    priceMax: z.number().finite().min(0, "≥ 0").optional(),
+    // Grille tarifaire (année civile)
+    pricingYear: z.number().finite().int().min(2000, "2000–2100").max(2100, "2000–2100"),
+    pricingDefaultNightlyPrice: z.number().finite().int().min(0, "≥ 0"),
+
+    // Ménage
     cleaningIncluded: z.boolean().default(false),
-    cleaningPrice: z.number().finite().min(0, "≥ 0").optional(),
+    cleaningPrice: z.number().finite().int().min(0, "≥ 0").optional(),
 
     // Descriptions
     shortDescription: z.string().min(10, "Description courte trop courte"),
@@ -123,10 +228,6 @@ const schema = z
     // (Similars/testimonials: gérés en Studio)
   })
   .superRefine((values, ctx) => {
-    // Prix max ≥ prix min si présent
-    if (typeof values.priceMax === "number" && values.priceMax < values.priceMin) {
-      ctx.addIssue({ code: "custom", path: ["priceMax"], message: "Doit être ≥ prix min" });
-    }
     // Si ménage = oui, prix ménage requis
     if (values.cleaningIncluded && typeof values.cleaningPrice !== "number") {
       ctx.addIssue({ code: "custom", path: ["cleaningPrice"], message: "Requis si ménage = oui" });
@@ -148,6 +249,12 @@ export default function OnboardingPage() {
   const [picked, setPicked] = useState<PickedImage[]>([]);
   const pickedRef = useRef<PickedImage[]>([]);
   const [heroIndex, setHeroIndex] = useState<number>(0);
+
+  const [pricingMode, setPricingMode] = useState<PricingMode>("week");
+  const [pricingSelection, setPricingSelection] = useState<PricingRange | null>(null);
+  const [pricingAnchor, setPricingAnchor] = useState<Date | null>(null);
+  const [pricingOverrides, setPricingOverrides] = useState<PricingOverride[]>([]);
+  const [pricingApplyPrice, setPricingApplyPrice] = useState<number>(200);
 
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState("");
@@ -171,12 +278,36 @@ export default function OnboardingPage() {
       maxGuests: 1,
       bedrooms: 1,
       bathrooms: 1,
+      pricingYear: new Date().getFullYear(),
+      pricingDefaultNightlyPrice: 200,
       cleaningIncluded: false,
     },
     mode: "onTouched",
   });
 
   const v = watch();
+  const pricingStats = computePricingMinMax(v.pricingDefaultNightlyPrice, pricingOverrides);
+
+  // Re-normalise les overrides si l'année / le prix par défaut change
+  useEffect(() => {
+    if (!Number.isFinite(v.pricingYear) || !Number.isInteger(v.pricingYear)) return;
+    if (!Number.isFinite(v.pricingDefaultNightlyPrice) || !Number.isInteger(v.pricingDefaultNightlyPrice))
+      return;
+
+    setPricingOverrides((prev) => {
+      const next = normalizePricingOverrides(v.pricingYear, v.pricingDefaultNightlyPrice, prev);
+      return sameOverrides(prev, next) ? prev : next;
+    });
+  }, [v.pricingYear, v.pricingDefaultNightlyPrice, setPricingOverrides]);
+
+  // Initialise le prix d'application depuis le prix par défaut
+  useEffect(() => {
+    if (!Number.isFinite(v.pricingDefaultNightlyPrice) || !Number.isInteger(v.pricingDefaultNightlyPrice))
+      return;
+    setPricingApplyPrice((prev) =>
+      Number.isFinite(prev) && Number.isInteger(prev) && prev >= 0 ? prev : v.pricingDefaultNightlyPrice
+    );
+  }, [v.pricingDefaultNightlyPrice]);
 
   // Suggestions pré-remplies pour aider la saisie
   const suggestedQuickHighlights = [
@@ -318,11 +449,12 @@ export default function OnboardingPage() {
       fd.append("shortDescription", formValues.shortDescription);
       fd.append("longDescription", formValues.longDescription);
 
-      // Prix & ménage
-      fd.append("priceMin", String(formValues.priceMin));
-      if (typeof formValues.priceMax === "number") {
-        fd.append("priceMax", String(formValues.priceMax));
-      }
+      // Grille tarifaire (année)
+      fd.append("pricingYear", String(formValues.pricingYear));
+      fd.append("pricingDefaultNightlyPrice", String(formValues.pricingDefaultNightlyPrice));
+      fd.append("pricingOverrides", JSON.stringify(pricingOverrides));
+
+      // Ménage
       fd.append("cleaningIncluded", String(Boolean(formValues.cleaningIncluded)));
       if (typeof formValues.cleaningPrice === "number") {
         fd.append("cleaningPrice", String(formValues.cleaningPrice));
@@ -370,6 +502,58 @@ export default function OnboardingPage() {
       setSubmitting(false);
     }
   });
+
+  const pricingYear =
+    typeof v.pricingYear === "number" && Number.isFinite(v.pricingYear)
+      ? Math.trunc(v.pricingYear)
+      : new Date().getFullYear();
+  const pricingDefaultNightlyPrice =
+    typeof v.pricingDefaultNightlyPrice === "number" && Number.isFinite(v.pricingDefaultNightlyPrice)
+      ? Math.trunc(v.pricingDefaultNightlyPrice)
+      : 0;
+
+  const pricingOverrideMatchers = pricingOverrides
+    .map((o) => {
+      const from = startOfDay(parseISO(String(o?.from || "")));
+      const to = startOfDay(parseISO(String(o?.to || "")));
+      if (!isValid(from) || !isValid(to)) return null;
+      return { from, to };
+    })
+    .filter((x): x is { from: Date; to: Date } => !!x);
+
+  const pricingSelectionMatcher = pricingSelection
+    ? { from: pricingSelection.from, to: pricingSelection.to }
+    : undefined;
+
+  function PricingDayButton(props: DayButtonProps) {
+    const { day, modifiers, className, children, ...buttonProps } = props;
+    const ymd = toYmd(day.date);
+    const price = getNightlyPriceForDay(ymd, pricingDefaultNightlyPrice, pricingOverrides);
+    const isOverride = Boolean(modifiers?.override);
+    const isSelected = Boolean(modifiers?.selection);
+    return (
+      <button
+        {...buttonProps}
+        className={[
+          className || "",
+          "flex h-10 w-10 flex-col items-center justify-center rounded-xl text-[11px] leading-none transition",
+          "hover:bg-slate-50",
+          isOverride ? "bg-amber-100 text-amber-950" : "bg-white text-slate-900",
+          isSelected ? "ring-2 ring-slate-900" : "ring-1 ring-slate-200",
+        ].join(" ")}
+      >
+        <span className="font-semibold">{children}</span>
+        <span
+          className={[
+            "mt-0.5 text-[9px] font-medium",
+            isOverride ? "text-amber-900" : "text-slate-500",
+          ].join(" ")}
+        >
+          {price}€
+        </span>
+      </button>
+    );
+  }
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-10">
@@ -475,22 +659,304 @@ export default function OnboardingPage() {
                   </Field>
                 </div>
 
-                {/* Prix & ménage */}
-                <div className="grid gap-4 md:grid-cols-3">
-                  <Field label="Prix min / nuit (EUR)" error={errors.priceMin?.message}>
-                    <Input type="number" min={0} step={1} {...register("priceMin", { valueAsNumber: true })} />
-                  </Field>
-                  <Field label="Prix max / nuit (EUR)" error={errors.priceMax?.message}>
-                    <Input type="number" min={0} step={1} {...register("priceMax", { valueAsNumber: true })} />
-                  </Field>
-                  <Field label="Ménage inclus ?" error={errors.cleaningIncluded?.message as string}>
-                    <input type="checkbox" className="h-4 w-4 align-middle" {...register("cleaningIncluded")} />
-                  </Field>
-                </div>
-                <div className="grid gap-4 md:grid-cols-3">
-                  <Field label="Prix ménage (EUR)" error={errors.cleaningPrice?.message}>
-                    <Input type="number" min={0} step={1} {...register("cleaningPrice", { valueAsNumber: true })} />
-                  </Field>
+                {/* Grille tarifaire + ménage */}
+                <div className="rounded-3xl bg-slate-50 p-4 ring-1 ring-slate-200">
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        Grille tarifaire (année civile)
+                      </p>
+                      <p className="mt-1 text-sm text-slate-600">
+                        Définis un prix par défaut puis ajuste des périodes (jour / semaine / mois).
+                      </p>
+                    </div>
+
+                    {pricingStats ? (
+                      <p className="text-xs text-slate-600">
+                        Min{" "}
+                        <span className="font-semibold text-slate-900">
+                          {pricingStats.min.toLocaleString("fr-FR")} €
+                        </span>
+                        {typeof pricingStats.max === "number" ? (
+                          <>
+                            {" "}
+                            • Max{" "}
+                            <span className="font-semibold text-slate-900">
+                              {pricingStats.max.toLocaleString("fr-FR")} €
+                            </span>
+                          </>
+                        ) : null}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 grid gap-4 md:grid-cols-4">
+                    <Field label="Année" error={errors.pricingYear?.message}>
+                      <Input
+                        type="number"
+                        min={2000}
+                        max={2100}
+                        step={1}
+                        {...register("pricingYear", { valueAsNumber: true })}
+                      />
+                    </Field>
+                    <Field
+                      label="Prix par défaut / nuit (EUR)"
+                      error={errors.pricingDefaultNightlyPrice?.message}
+                    >
+                      <Input
+                        type="number"
+                        min={0}
+                        step={1}
+                        {...register("pricingDefaultNightlyPrice", { valueAsNumber: true })}
+                      />
+                    </Field>
+                    <Field label="Ménage inclus ?" error={errors.cleaningIncluded?.message as string}>
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 align-middle"
+                        {...register("cleaningIncluded")}
+                      />
+                    </Field>
+                    <Field label="Prix ménage (EUR)" error={errors.cleaningPrice?.message}>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={1}
+                        {...register("cleaningPrice", { valueAsNumber: true })}
+                      />
+                    </Field>
+                  </div>
+
+	                  <div className="mt-4 grid gap-4 grid-cols-1 ">
+	                    <div className="overflow-hidden rounded-2xl bg-white p-2 ring-1 ring-slate-200">
+	                      <DayPicker
+	                        locale={fr}
+	                        weekStartsOn={1}
+                        showOutsideDays={false}
+                        defaultMonth={new Date(pricingYear, 0, 1)}
+                        startMonth={new Date(pricingYear, 0, 1)}
+                        endMonth={new Date(pricingYear, 11, 1)}
+                        modifiers={{
+                          override: pricingOverrideMatchers,
+                          ...(pricingSelectionMatcher ? { selection: pricingSelectionMatcher } : {}),
+                        }}
+                        components={{ DayButton: PricingDayButton }}
+                        onDayClick={(day, _modifiers, e) => {
+                          const base = startOfDay(day);
+                          const yearStart = startOfDay(new Date(pricingYear, 0, 1));
+                          const yearEnd = startOfDay(new Date(pricingYear, 11, 31));
+
+                          const hasShift = e.shiftKey;
+                          const anchor = pricingAnchor;
+
+                          // Shift + clic: étend la sélection depuis l'ancre
+                          if (hasShift && anchor) {
+                            const start = anchor < base ? anchor : base;
+                            const end = anchor < base ? base : anchor;
+
+                            let from = start;
+                            let to = end;
+
+                            if (pricingMode === "week") {
+                              from = startOfWeek(start, { weekStartsOn: 1 });
+                              to = endOfWeek(end, { weekStartsOn: 1 });
+                            } else if (pricingMode === "month") {
+                              from = startOfMonth(start);
+                              to = endOfMonth(end);
+                            }
+
+                            if (from < yearStart) from = yearStart;
+                            if (to > yearEnd) to = yearEnd;
+
+                            setPricingSelection({ from, to });
+                            return;
+                          }
+
+                          // Clic simple: sélection "bloc" selon le mode et définit l'ancre
+                          let from = base;
+                          let to = base;
+
+                          if (pricingMode === "week") {
+                            from = startOfWeek(base, { weekStartsOn: 1 });
+                            to = endOfWeek(base, { weekStartsOn: 1 });
+                          } else if (pricingMode === "month") {
+                            from = startOfMonth(base);
+                            to = endOfMonth(base);
+                          }
+
+                          if (from < yearStart) from = yearStart;
+                          if (to > yearEnd) to = yearEnd;
+
+                          setPricingAnchor(base);
+                          setPricingSelection({ from, to });
+                        }}
+                        classNames={{
+                          month: "w-full",
+                          month_caption: "mb-2 flex items-center justify-between px-1",
+                          caption_label: "text-sm font-semibold text-slate-900",
+                          nav: "flex items-center gap-1",
+                          button_previous:
+                            "grid h-9 w-9 place-items-center rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-50",
+                          button_next:
+                            "grid h-9 w-9 place-items-center rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-50",
+                          month_grid: "w-full border-collapse",
+                          weekday:
+                            "py-1 text-[10px] font-medium uppercase tracking-wider text-slate-500",
+	                          day: "p-0.5",
+	                          day_button: "focus:outline-none",
+	                        }}
+	                      />
+
+	                      <div className="mt-3 border-t border-slate-100 px-1 pb-1 pt-3">
+	                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+	                          Mode de sélection
+	                        </p>
+	                        <div className="mt-2 flex flex-wrap gap-2">
+	                          {([
+	                            ["day", "Jour"],
+	                            ["week", "Semaine"],
+	                            ["month", "Mois"],
+	                          ] as const).map(([key, label]) => (
+	                            <button
+	                              key={key}
+	                              type="button"
+	                              onClick={() => setPricingMode(key)}
+	                              className={[
+	                                "rounded-full px-3 py-1 text-xs font-semibold ring-1 transition",
+	                                pricingMode === key
+	                                  ? "bg-slate-900 text-white ring-slate-900"
+	                                  : "bg-white text-slate-700 ring-slate-200 hover:bg-slate-50",
+	                              ].join(" ")}
+	                            >
+	                              {label}
+	                            </button>
+	                          ))}
+	                        </div>
+	                      </div>
+	                    </div>
+
+	                    <div className="space-y-3">
+	                      <div className="rounded-2xl bg-white p-3 ring-1 ring-slate-200">
+	                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+	                          Sélection
+	                        </p>
+                        {pricingSelection ? (
+                          <p className="mt-1 text-sm font-medium text-slate-900">
+                            {toYmd(pricingSelection.from)} → {toYmd(pricingSelection.to)}
+                          </p>
+                        ) : (
+                          <p className="mt-1 text-sm text-slate-600">Clique sur une date.</p>
+                        )}
+
+                        <div className="mt-3 grid gap-2">
+                          <label className="text-[11px] font-medium uppercase tracking-[0.2em] text-slate-500">
+                            Prix (€/nuit)
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            value={Number.isFinite(pricingApplyPrice) ? pricingApplyPrice : ""}
+                            onChange={(e) => setPricingApplyPrice(Number(e.target.value))}
+                            className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-800 outline-none focus:border-slate-300 focus:bg-white"
+                          />
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={
+                              !pricingSelection ||
+                              !Number.isFinite(pricingApplyPrice) ||
+                              !Number.isInteger(pricingApplyPrice) ||
+                              pricingApplyPrice < 0 ||
+                              !Number.isFinite(pricingDefaultNightlyPrice) ||
+                              !Number.isInteger(pricingDefaultNightlyPrice)
+                            }
+                            onClick={() => {
+                              if (!pricingSelection) return;
+                              if (!Number.isFinite(pricingApplyPrice) || !Number.isInteger(pricingApplyPrice))
+                                return;
+
+                              const next = normalizePricingOverrides(pricingYear, pricingDefaultNightlyPrice, [
+                                ...pricingOverrides,
+                                {
+                                  from: toYmd(pricingSelection.from),
+                                  to: toYmd(pricingSelection.to),
+                                  nightlyPrice: pricingApplyPrice,
+                                },
+                              ]);
+                              setPricingOverrides(next);
+                            }}
+                            className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                          >
+                            Appliquer
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPricingSelection(null);
+                              setPricingAnchor(null);
+                            }}
+                            className="rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+                          >
+                            Effacer sélection
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                            Périodes personnalisées
+                          </p>
+                          {pricingOverrides.length ? (
+                            <button
+                              type="button"
+                              onClick={() => setPricingOverrides([])}
+                              className="text-xs font-semibold text-slate-600 hover:text-slate-900"
+                            >
+                              Tout effacer
+                            </button>
+                          ) : null}
+                        </div>
+
+                        {pricingOverrides.length ? (
+                          <ul className="space-y-2">
+                            {pricingOverrides.map((o, idx) => (
+                              <li
+                                key={`${o.from}-${o.to}-${o.nightlyPrice}-${idx}`}
+                                className="flex items-start justify-between gap-3 rounded-2xl bg-white px-3 py-2 ring-1 ring-slate-200"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-xs font-semibold text-slate-900">
+                                    {o.from} → {o.to}
+                                  </p>
+                                  <p className="text-xs text-slate-600">
+                                    {o.nightlyPrice.toLocaleString("fr-FR")} € / nuit
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPricingOverrides((prev) => prev.filter((_, i) => i !== idx))
+                                  }
+                                  className="rounded-full bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100"
+                                >
+                                  Supprimer
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-sm text-slate-600">
+                            Aucune période personnalisée pour l’instant.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <Field label="Description courte" error={errors.shortDescription?.message}>
@@ -913,10 +1379,12 @@ export default function OnboardingPage() {
           </div>
 
           {/* Aperçu prix */}
-          {typeof v.priceMin === "number" ? (
+          {pricingStats ? (
             <p className="mt-3 text-sm text-slate-700">
-              Prix dès {v.priceMin.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} € / nuit
-              {typeof v.priceMax === "number" ? ` · jusqu’à ${v.priceMax.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} €` : ""}
+              Prix dès {pricingStats.min.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} € / nuit
+              {typeof pricingStats.max === "number"
+                ? ` · jusqu’à ${pricingStats.max.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} €`
+                : ""}
             </p>
           ) : null}
         </aside>

@@ -89,13 +89,18 @@ async function getVillaBySlug(slug: string): Promise<Villa | null> {
     }
   `;
 
-  return client.fetch<Villa | null>(query, { docType: VILLA_DOC_TYPE, slug });
+  return client.fetch<Villa | null>(
+    query,
+    { docType: VILLA_DOC_TYPE, slug },
+    { next: { revalidate } },
+  );
 }
 
 export async function generateStaticParams() {
   const slugs = await client.fetch<{ slug: string }[]>(
     `*[_type == $docType && defined(slug.current)]{ "slug": slug.current }`,
     { docType: VILLA_DOC_TYPE },
+    { next: { revalidate } },
   );
   return slugs.map((s) => ({ slug: s.slug }));
 }

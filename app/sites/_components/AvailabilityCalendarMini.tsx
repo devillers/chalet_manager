@@ -89,22 +89,29 @@ export function AvailabilityCalendarMini({
             disabled={disabled}
             classNames={{
               month: "w-full",
-              caption: "mb-2 flex items-center justify-between",
+              month_caption: "mb-2 flex items-center justify-between",
               caption_label: "text-xs font-semibold text-slate-900",
               nav: "flex items-center gap-1",
-              nav_button:
+              button_previous:
                 "h-8 w-8 rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-50",
-              table: "w-full border-collapse",
-              head_cell:
+              button_next:
+                "h-8 w-8 rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-50",
+              month_grid: "w-full border-collapse",
+              weekday:
                 "py-1 text-[10px] font-medium uppercase tracking-wider text-slate-500",
-              cell: "p-0.5",
-              day: "h-8 w-8 rounded-xl text-xs font-medium hover:bg-slate-100",
-              day_today: "ring-1 ring-slate-300",
-              day_disabled:
-                "bg-slate-200 text-slate-400 line-through hover:bg-slate-200",
+              day: "p-0.5",
+              day_button:
+                "flex h-8 w-8 items-center justify-center rounded-xl text-xs font-medium hover:bg-slate-100 disabled:cursor-not-allowed disabled:bg-rose-200 disabled:text-rose-900 disabled:opacity-100 disabled:hover:bg-rose-200",
             }}
           />
         </div>
+
+        {disabled.length > 0 && (
+          <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-600">
+            <span className="h-3 w-3 rounded-sm bg-rose-200 ring-1 ring-rose-300" />
+            <span>Occupé</span>
+          </div>
+        )}
 
         {/* Actions visibles seulement si on a des URLs */}
         {(webcalHref || downloadPath) && (

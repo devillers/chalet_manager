@@ -803,7 +803,7 @@ export function FranceChaletMap({ villas }: Props) {
                         </div>
                       </div>
                     </div>
-                  <div className="flex items-center rounded-2xl border border-white/10 bg-white/5 p-3">
+                    <div className="flex items-center rounded-2xl border border-white/10 bg-white/5 p-3">
                       <div className="flex items-center justify-center gap-2 text-[30px] text-white/55">
                         <Bath className="h-5 w-5 text-white" />
                         <div className="mt-1 text-sm font-semibold text-white">
@@ -813,16 +813,16 @@ export function FranceChaletMap({ villas }: Props) {
                         </div>
                       </div>
                     </div>
-                        <div className="flex items-center rounded-2xl border border-white/10 bg-white/5 p-3">
+                    <div className="flex items-center rounded-2xl border border-white/10 bg-white/5 p-3">
                       <div className="flex items-center justify-center gap-2 text-[30px] text-white/55">
-                    <Ruler className="h-5 w-5 text-white" />
-                    <div className="mt-1 text-sm font-semibold text-white">
-                      {typeof activeVilla.surface === "number"
-                        ? `${activeVilla.surface} m²`
-                        : "—"}
+                        <Ruler className="h-5 w-5 text-white" />
+                        <div className="mt-1 text-sm font-semibold text-white">
+                          {typeof activeVilla.surface === "number"
+                            ? `${activeVilla.surface} m²`
+                            : "—"}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
                   </div>
                 </div>
               </div>
@@ -832,8 +832,6 @@ export function FranceChaletMap({ villas }: Props) {
 
             {/* Content */}
             <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-           
-
               {amenityBadges.length ? (
                 <div className="mt-2 grid grid-cols-4 gap-2">
                   {amenityBadges.map(({ key, label, Icon }) => (

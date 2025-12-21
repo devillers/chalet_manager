@@ -163,6 +163,21 @@ function buildAddress(v: Pick<VillaRow, "street" | "postalCode" | "city" | "regi
     .join(", ");
 }
 
+function buildIcalExportUrl(v: Pick<VillaRow, "slug" | "customDomain">) {
+  if (!v.slug) return "";
+  const customDomain = typeof v.customDomain === "string" ? v.customDomain.trim() : "";
+  const base = customDomain
+    ? /^https?:\/\//i.test(customDomain)
+      ? customDomain
+      : `https://${customDomain}`
+    : process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  try {
+    return new URL(`/api/villas/${v.slug}/calendar.ics`, base).toString();
+  } catch {
+    return `${String(base).replace(/\/$/, "")}/api/villas/${v.slug}/calendar.ics`;
+  }
+}
+
 function studioIntentHref(type: string, id: string) {
   return `/studio/intent/edit/id=${encodeURIComponent(id)};type=${encodeURIComponent(type)}`;
 }
@@ -590,6 +605,9 @@ export default async function AdminDashboardPage({
                       const address = [v.street, v.postalCode, v.city].filter(Boolean).join(", ");
                       const ownerLabel = v.owner?.ownerName || v.owner?.ownerEmail || "—";
                       const hasCoords = isValidLngLat(v.lat, v.lng);
+                      const icalExportUrl = buildIcalExportUrl(v);
+                      const priceMaxDisplay =
+                        typeof v.priceMax === "number" && Number.isFinite(v.priceMax) ? v.priceMax : v.priceMin;
                       return (
                         <tr key={v._id} className="border-b border-slate-100 last:border-b-0 transition-colors hover:bg-slate-50/70">
                           <td className="px-4 py-3 align-top">
@@ -614,6 +632,19 @@ export default async function AdminDashboardPage({
                             <div className="space-y-1">
                               <p className="text-slate-900">{address || "—"}</p>
                               <p className="text-xs text-slate-500">{[v.region, v.country].filter(Boolean).join(", ")}</p>
+                              {icalExportUrl ? (
+                                <p className="text-xs text-slate-500">
+                                  iCal:{" "}
+                                  <a
+                                    className="break-all hover:underline"
+                                    href={icalExportUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    {icalExportUrl}
+                                  </a>
+                                </p>
+                              ) : null}
                               {v.customDomain ? <Pill tone="amber">{v.customDomain}</Pill> : null}
                             </div>
                           </td>
@@ -624,7 +655,7 @@ export default async function AdminDashboardPage({
                                 <span className="text-xs font-normal text-slate-500">/ nuit</span>
                               </p>
                               <p className="text-xs text-slate-500">
-                                max {fmtMoney(v.priceMax)} • ménage{" "}
+                                max {fmtMoney(priceMaxDisplay)} • ménage{" "}
                                 {v.cleaningIncluded ? <Pill tone="emerald">oui</Pill> : <Pill tone="slate">non</Pill>}
                               </p>
                             </div>

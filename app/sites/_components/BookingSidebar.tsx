@@ -288,8 +288,12 @@ export function BookingSidebar({ villa, blockedRanges = [] }: BookingSidebarProp
     else router.push(contactHref);
   };
 
-  const subscribePath = villaSlug ? `/api/villas/${villaSlug}/calendar.ics` : "";
-  const downloadPath = villaSlug ? `/api/villas/${villaSlug}/calendar.ics?download=1` : "";
+  const hasIcalUrl =
+    typeof (villa as any).availabilityIcalUrl === "string" &&
+    (villa as any).availabilityIcalUrl.trim().length > 0;
+  const subscribePath = villaSlug && hasIcalUrl ? `/api/villas/${villaSlug}/calendar.ics` : "";
+  const downloadPath =
+    villaSlug && hasIcalUrl ? `/api/villas/${villaSlug}/calendar.ics?download=1` : "";
 
   return (
     <>

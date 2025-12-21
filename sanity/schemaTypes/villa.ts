@@ -177,6 +177,94 @@ export const villa = defineType({
         }),
     }),
 
+    defineField({
+      name: "pricingCalendars",
+      title: "Grille tarifaire (par année) (optionnel)",
+      type: "array",
+      group: "pricing",
+      of: [
+        {
+          type: "object",
+          name: "pricingCalendar",
+          title: "Année",
+          fields: [
+            defineField({
+              name: "year",
+              title: "Année",
+              type: "number",
+              validation: (Rule) => Rule.required().integer().min(2000).max(2100),
+            }),
+            defineField({
+              name: "defaultNightlyPrice",
+              title: "Prix par défaut / nuit (EUR)",
+              type: "number",
+              validation: (Rule) => Rule.required().integer().min(0),
+            }),
+            defineField({
+              name: "overrides",
+              title: "Périodes (prix / nuit)",
+              type: "array",
+              of: [
+                {
+                  type: "object",
+                  name: "pricingOverride",
+                  title: "Période",
+                  fields: [
+                    defineField({
+                      name: "from",
+                      title: "Du",
+                      type: "date",
+                      validation: (Rule) => Rule.required(),
+                    }),
+                    defineField({
+                      name: "to",
+                      title: "Au",
+                      type: "date",
+                      validation: (Rule) => Rule.required(),
+                    }),
+                    defineField({
+                      name: "nightlyPrice",
+                      title: "Prix / nuit (EUR)",
+                      type: "number",
+                      validation: (Rule) => Rule.required().integer().min(0),
+                    }),
+                  ],
+                  preview: {
+                    select: { from: "from", to: "to", nightlyPrice: "nightlyPrice" },
+                    prepare({ from, to, nightlyPrice }: any) {
+                      return {
+                        title: `${from ?? "—"} → ${to ?? "—"}`,
+                        subtitle:
+                          typeof nightlyPrice === "number"
+                            ? `${nightlyPrice.toLocaleString("fr-FR")} € / nuit`
+                            : "—",
+                      };
+                    },
+                  },
+                },
+              ],
+              validation: (Rule) => Rule.min(0),
+            }),
+          ],
+          preview: {
+            select: { year: "year", defaultNightlyPrice: "defaultNightlyPrice", overrides: "overrides" },
+            prepare({ year, defaultNightlyPrice, overrides }: any) {
+              const count = Array.isArray(overrides) ? overrides.length : 0;
+              const base =
+                typeof defaultNightlyPrice === "number"
+                  ? `${defaultNightlyPrice.toLocaleString("fr-FR")} € / nuit`
+                  : "—";
+              return {
+                title: year ? `Tarifs ${year}` : "Tarifs (année)",
+                subtitle: `${base}${count ? ` • ${count} périodes` : ""}`,
+              };
+            },
+          },
+        },
+      ],
+      validation: (Rule) => Rule.min(0),
+    }),
+
     // CONTENU -------------------------------------------------------------
     defineField({
       name: "shortDescription",

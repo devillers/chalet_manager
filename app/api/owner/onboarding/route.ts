@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@sanity/client";
 import { randomUUID } from "crypto";
+import { addDays, differenceInCalendarDays, format, isValid, parseISO, startOfDay } from "date-fns";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,6 +74,17 @@ function parseJsonArray<T = unknown>(fd: FormData, key: string): T[] {
   }
 }
 
+function parseYmdDate(input: unknown): Date | null {
+  if (typeof input !== "string") return null;
+  const s = input.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = startOfDay(parseISO(s));
+  if (!isValid(d)) return null;
+  // Valide strictement la date (évite 2026-02-31, etc.)
+  if (format(d, "yyyy-MM-dd") !== s) return null;
+  return d;
+}
+
 function randomOwnerKey() {
   return `owner-${Math.random().toString(36).slice(2, 10)}-${Math.random()
     .toString(36)
@@ -123,6 +135,17 @@ type SanityDistanceItem = {
 };
 type TestimonialItem = { name?: string; date?: string; text?: string; rating?: number };
 
+type PricingOverrideInput = { from?: unknown; to?: unknown; nightlyPrice?: unknown };
+type PricingOverride = { from: string; to: string; nightlyPrice: number };
+type SanityPricingOverride = PricingOverride & { _key: string; _type: "pricingOverride" };
+type SanityPricingCalendar = {
+  _key: string;
+  _type: "pricingCalendar";
+  year: number;
+  defaultNightlyPrice: number;
+  overrides?: SanityPricingOverride[];
+};
+
 type VillaPayload = {
   _type: "villa";
   ownerSite: SanityRef;
@@ -146,6 +169,7 @@ type VillaPayload = {
   priceMax?: number;
   cleaningIncluded?: boolean;
   cleaningPrice?: number;
+  pricingCalendars?: SanityPricingCalendar[];
 
   // content
   shortDescription: string;
@@ -202,8 +226,12 @@ export async function POST(req: Request) {
     const bedrooms = n(fd, "bedrooms");
     const bathrooms = n(fd, "bathrooms");
 
-    const priceMin = n(fd, "priceMin");
-    const priceMax = n(fd, "priceMax");
+    // Grille tarifaire (nouveau) + fallback legacy (priceMin/priceMax)
+    const pricingYear = n(fd, "pricingYear");
+    const pricingDefaultNightlyPrice = n(fd, "pricingDefaultNightlyPrice");
+    const pricingOverridesInput = parseJsonArray<PricingOverrideInput>(fd, "pricingOverrides");
+    const legacyPriceMin = n(fd, "priceMin");
+    const legacyPriceMax = n(fd, "priceMax");
     const cleaningIncluded = b(fd, "cleaningIncluded");
     const cleaningPrice = n(fd, "cleaningPrice");
 
@@ -312,12 +340,143 @@ export async function POST(req: Request) {
         { status: 400 }
       );
 
-    if (typeof priceMin !== "number" || priceMin < 0) {
-      return NextResponse.json({ error: "priceMin invalide (≥ 0)." }, { status: 400 });
+    let priceMin: number | undefined;
+    let priceMax: number | undefined;
+    let nextPricingCalendars: SanityPricingCalendar[] | undefined = undefined;
+
+    const hasPricingCalendar =
+      typeof pricingYear === "number" &&
+      Number.isFinite(pricingYear) &&
+      Number.isInteger(pricingYear) &&
+      typeof pricingDefaultNightlyPrice === "number" &&
+      Number.isFinite(pricingDefaultNightlyPrice) &&
+      Number.isInteger(pricingDefaultNightlyPrice);
+
+    if (hasPricingCalendar) {
+      if (pricingYear < 2000 || pricingYear > 2100) {
+        return NextResponse.json({ error: "pricingYear invalide (2000–2100)." }, { status: 400 });
+      }
+      if (pricingDefaultNightlyPrice < 0) {
+        return NextResponse.json(
+          { error: "pricingDefaultNightlyPrice invalide (≥ 0)." },
+          { status: 400 }
+        );
+      }
+
+      const yearStart = startOfDay(new Date(pricingYear, 0, 1));
+      const yearEnd = startOfDay(new Date(pricingYear, 11, 31));
+      const daysInYear = differenceInCalendarDays(
+        startOfDay(new Date(pricingYear + 1, 0, 1)),
+        yearStart
+      );
+
+      const dayPrices = Array.from({ length: daysInYear }, () => pricingDefaultNightlyPrice);
+
+      // Applique overrides (ordre = priorité, le dernier gagne)
+      for (const raw of pricingOverridesInput) {
+        const nightlyPrice = Number(raw.nightlyPrice);
+        if (!Number.isFinite(nightlyPrice) || !Number.isInteger(nightlyPrice) || nightlyPrice < 0) {
+          return NextResponse.json(
+            { error: "pricingOverrides: nightlyPrice invalide (entier ≥ 0)." },
+            { status: 400 }
+          );
+        }
+
+        const fromDate = parseYmdDate(raw.from);
+        const toDate = parseYmdDate(raw.to);
+        if (!fromDate || !toDate) {
+          return NextResponse.json(
+            { error: "pricingOverrides: dates invalides (YYYY-MM-DD)." },
+            { status: 400 }
+          );
+        }
+
+        if (fromDate < yearStart || toDate > yearEnd) {
+          return NextResponse.json(
+            { error: "pricingOverrides: dates hors année sélectionnée." },
+            { status: 400 }
+          );
+        }
+
+        if (fromDate > toDate) {
+          return NextResponse.json(
+            { error: "pricingOverrides: 'from' doit être ≤ 'to'." },
+            { status: 400 }
+          );
+        }
+
+        const fromIdx = differenceInCalendarDays(fromDate, yearStart);
+        const toIdx = differenceInCalendarDays(toDate, yearStart);
+        if (fromIdx < 0 || toIdx >= daysInYear) {
+          return NextResponse.json(
+            { error: "pricingOverrides: dates hors année sélectionnée." },
+            { status: 400 }
+          );
+        }
+
+        for (let i = fromIdx; i <= toIdx; i++) {
+          dayPrices[i] = nightlyPrice;
+        }
+      }
+
+      // Normalise en ranges (uniquement quand prix != default)
+      const normalized: PricingOverride[] = [];
+      for (let i = 0; i < dayPrices.length; i++) {
+        const price = dayPrices[i];
+        if (price === pricingDefaultNightlyPrice) continue;
+
+        const startIdx = i;
+        while (i + 1 < dayPrices.length && dayPrices[i + 1] === price) i++;
+        const endIdx = i;
+
+        const from = format(addDays(yearStart, startIdx), "yyyy-MM-dd");
+        const to = format(addDays(yearStart, endIdx), "yyyy-MM-dd");
+
+        normalized.push({ from, to, nightlyPrice: price });
+      }
+
+      const sanityCalendar: SanityPricingCalendar = {
+        _key: randomUUID(),
+        _type: "pricingCalendar",
+        year: pricingYear,
+        defaultNightlyPrice: pricingDefaultNightlyPrice,
+        overrides: normalized.length
+          ? normalized.map((o) => ({
+              _key: randomUUID(),
+              _type: "pricingOverride",
+              from: o.from,
+              to: o.to,
+              nightlyPrice: o.nightlyPrice,
+            }))
+          : undefined,
+      };
+
+      // Min / max calculés sur l'année (default + overrides)
+      const prices = [pricingDefaultNightlyPrice, ...normalized.map((o) => o.nightlyPrice)];
+      priceMin = Math.min(...prices);
+      priceMax = Math.max(...prices);
+      if (priceMax === priceMin) priceMax = undefined;
+
+      // Merge sur une villa existante (si on met à jour une autre année plus tard)
+      // -> upsert par année en conservant les autres.
+      // (sera finalisé après récupération de existingVilla)
+      nextPricingCalendars = [sanityCalendar];
+    } else {
+      // Fallback legacy
+      if (typeof legacyPriceMin !== "number" || legacyPriceMin < 0) {
+        return NextResponse.json({ error: "priceMin invalide (≥ 0)." }, { status: 400 });
+      }
+      if (typeof legacyPriceMax === "number" && legacyPriceMax < legacyPriceMin) {
+        return NextResponse.json({ error: "priceMax doit être ≥ priceMin." }, { status: 400 });
+      }
+      priceMin = legacyPriceMin;
+      priceMax = typeof legacyPriceMax === "number" ? legacyPriceMax : undefined;
     }
-    if (typeof priceMax === "number" && priceMax < priceMin) {
-      return NextResponse.json({ error: "priceMax doit être ≥ priceMin." }, { status: 400 });
+
+    if (typeof priceMin !== "number") {
+      return NextResponse.json({ error: "Prix requis." }, { status: 400 });
     }
+
     if (cleaningIncluded === true && typeof cleaningPrice !== "number") {
       return NextResponse.json({ error: "cleaningPrice requis si ménage = oui." }, { status: 400 });
     }
@@ -405,8 +564,12 @@ export async function POST(req: Request) {
     }
 
     // 2) villa idempotent simple
-    const existingVilla = await client.fetch<{ _id: string; slug?: string } | null>(
-      `*[_type=="villa" && ownerSite._ref==$ownerId && name==$name][0]{_id, "slug": slug.current}`,
+    const existingVilla = await client.fetch<{
+      _id: string;
+      slug?: string;
+      pricingCalendars?: SanityPricingCalendar[];
+    } | null>(
+      `*[_type=="villa" && ownerSite._ref==$ownerId && name==$name][0]{_id, "slug": slug.current, pricingCalendars}`,
       { ownerId: ownerSiteId, name: villaName }
     );
 
@@ -437,6 +600,18 @@ export async function POST(req: Request) {
 
     const coords = await geocodeAddress(addressForGeocode);
 
+    // Upsert de la grille tarifaire si fournie (conserve les autres années)
+    if (hasPricingCalendar && nextPricingCalendars?.length) {
+      const existingCalendars = Array.isArray(existingVilla?.pricingCalendars)
+        ? existingVilla!.pricingCalendars.filter((c) => c && typeof c === "object")
+        : [];
+      const incoming = nextPricingCalendars[0];
+      nextPricingCalendars = [
+        ...existingCalendars.filter((c) => c.year !== incoming.year),
+        incoming,
+      ].sort((a, b) => a.year - b.year);
+    }
+
     const villaPayload: VillaPayload = {
       _type: "villa",
       ownerSite: { _type: "reference", _ref: ownerSiteId },
@@ -458,6 +633,7 @@ export async function POST(req: Request) {
       priceMax: typeof priceMax === "number" ? priceMax : undefined,
       cleaningIncluded: typeof cleaningIncluded === "boolean" ? cleaningIncluded : undefined,
       cleaningPrice: typeof cleaningPrice === "number" ? cleaningPrice : undefined,
+      pricingCalendars: hasPricingCalendar ? nextPricingCalendars : undefined,
 
       shortDescription,
       longDescription,

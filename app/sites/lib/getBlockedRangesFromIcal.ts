@@ -1,14 +1,27 @@
 // app/sites/lib/getBlockedRangesFromIcal.ts
-import * as ical from "node-ical";
+import ical from "node-ical";
 import { addDays, startOfDay, isAfter } from "date-fns";
 
 export type BlockedRange = { from: string; to: string };
+
+function normalizeIcalUrl(input: string): string {
+  const url = String(input || "").trim();
+  if (!url) return "";
+  // Certains providers donnent des URLs "webcal://" (schéma iCal). On convertit en https.
+  return url.replace(/^webcals?:\/\//i, "https://");
+}
 
 export async function getBlockedRangesFromIcal(
   icalUrl: string,
 ): Promise<BlockedRange[]> {
   try {
-    const res = await fetch(icalUrl, { next: { revalidate: 300 } });
+    const url = normalizeIcalUrl(icalUrl);
+    if (!url) return [];
+
+    const res = await fetch(url, {
+      next: { revalidate: 300 },
+      headers: { Accept: "text/calendar,*/*" },
+    });
     if (!res.ok) return [];
 
     const ics = await res.text();
@@ -29,7 +42,14 @@ export async function getBlockedRangesFromIcal(
     }
 
     out.sort((a, b) => a.from.localeCompare(b.from));
-    return out;
+    // Évite les doublons (UID stable côté export .ics)
+    const deduped: BlockedRange[] = [];
+    for (const range of out) {
+      const prev = deduped.at(-1);
+      if (prev && prev.from === range.from && prev.to === range.to) continue;
+      deduped.push(range);
+    }
+    return deduped;
   } catch {
     return [];
   }
