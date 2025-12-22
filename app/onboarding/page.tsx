@@ -46,11 +46,18 @@ function splitLines(input?: string | null) {
 }
 
 type PricingMode = "day" | "week" | "month";
-type PricingOverride = { from: string; to: string; nightlyPrice: number };
+type PricingOverride = { from: string; to: string; nightlyPrice: number; label?: string };
 type PricingRange = { from: Date; to: Date };
+type ManualBlockedPeriod = { from: string; to: string; comment: string };
+
+type BlockedRange = { from: string; to: string };
 
 function toYmd(d: Date) {
   return format(d, "yyyy-MM-dd");
+}
+
+function rangesOverlap(a: { from: Date; to: Date }, b: { from: Date; to: Date }) {
+  return a.from <= b.to && b.from <= a.to;
 }
 
 function normalizePricingOverrides(
@@ -67,10 +74,14 @@ function normalizePricingOverrides(
   if (!Number.isFinite(daysInYear) || daysInYear <= 0) return [];
 
   const dayPrices = Array.from({ length: daysInYear }, () => defaultNightlyPrice);
+  const dayLabels: Array<string | undefined> = Array.from({ length: daysInYear }, () => undefined);
 
   for (const o of overrides) {
     const price = Number(o?.nightlyPrice);
     if (!Number.isFinite(price) || !Number.isInteger(price) || price < 0) continue;
+
+    const labelRaw = typeof o?.label === "string" ? o.label.trim() : "";
+    const label = labelRaw ? labelRaw.slice(0, 80) : undefined;
 
     const fromDate = startOfDay(parseISO(String(o?.from || "")));
     const toDate = startOfDay(parseISO(String(o?.to || "")));
@@ -82,22 +93,87 @@ function normalizePricingOverrides(
     const toIdx = differenceInCalendarDays(toDate, yearStart);
     if (fromIdx < 0 || toIdx >= daysInYear) continue;
 
-    for (let i = fromIdx; i <= toIdx; i++) dayPrices[i] = price;
+    for (let i = fromIdx; i <= toIdx; i++) {
+      dayPrices[i] = price;
+      dayLabels[i] = label;
+    }
   }
 
   const normalized: PricingOverride[] = [];
   for (let i = 0; i < dayPrices.length; i++) {
     const price = dayPrices[i];
-    if (price === defaultNightlyPrice) continue;
+    const label = dayLabels[i];
+    const isCustom = price !== defaultNightlyPrice || (typeof label === "string" && label.length > 0);
+    if (!isCustom) continue;
 
     const startIdx = i;
-    while (i + 1 < dayPrices.length && dayPrices[i + 1] === price) i++;
+    while (i + 1 < dayPrices.length) {
+      const nextPrice = dayPrices[i + 1];
+      const nextLabel = dayLabels[i + 1];
+      const nextIsCustom =
+        nextPrice !== defaultNightlyPrice || (typeof nextLabel === "string" && nextLabel.length > 0);
+      if (!nextIsCustom) break;
+      if (nextPrice !== price) break;
+      if ((nextLabel ?? "") !== (label ?? "")) break;
+      i++;
+    }
     const endIdx = i;
 
     normalized.push({
       from: toYmd(addDays(yearStart, startIdx)),
       to: toYmd(addDays(yearStart, endIdx)),
       nightlyPrice: price,
+      ...(label ? { label } : {}),
+    });
+  }
+
+  return normalized;
+}
+
+function normalizeManualBlockedPeriods(
+  year: number,
+  periods: ManualBlockedPeriod[],
+): ManualBlockedPeriod[] {
+  if (!Number.isFinite(year) || !Number.isInteger(year)) return [];
+
+  const yearStart = startOfDay(new Date(year, 0, 1));
+  const yearEnd = startOfDay(new Date(year, 11, 31));
+  const daysInYear = differenceInCalendarDays(startOfDay(new Date(year + 1, 0, 1)), yearStart);
+  if (!Number.isFinite(daysInYear) || daysInYear <= 0) return [];
+
+  const dayComments: Array<string | undefined> = Array.from({ length: daysInYear }, () => undefined);
+
+  for (const p of periods) {
+    const commentRaw = typeof p?.comment === "string" ? p.comment.trim() : "";
+    const comment = commentRaw ? commentRaw.slice(0, 120) : "";
+    if (!comment) continue;
+
+    const fromDate = startOfDay(parseISO(String(p?.from || "")));
+    const toDate = startOfDay(parseISO(String(p?.to || "")));
+    if (!isValid(fromDate) || !isValid(toDate)) continue;
+    if (fromDate > toDate) continue;
+    if (fromDate < yearStart || toDate > yearEnd) continue;
+
+    const fromIdx = differenceInCalendarDays(fromDate, yearStart);
+    const toIdx = differenceInCalendarDays(toDate, yearStart);
+    if (fromIdx < 0 || toIdx >= daysInYear) continue;
+
+    for (let i = fromIdx; i <= toIdx; i++) dayComments[i] = comment;
+  }
+
+  const normalized: ManualBlockedPeriod[] = [];
+  for (let i = 0; i < dayComments.length; i++) {
+    const comment = dayComments[i];
+    if (!comment) continue;
+
+    const startIdx = i;
+    while (i + 1 < dayComments.length && dayComments[i + 1] === comment) i++;
+    const endIdx = i;
+
+    normalized.push({
+      from: toYmd(addDays(yearStart, startIdx)),
+      to: toYmd(addDays(yearStart, endIdx)),
+      comment,
     });
   }
 
@@ -130,6 +206,19 @@ function sameOverrides(a: PricingOverride[], b: PricingOverride[]) {
     const bi = b[i];
     if (!ai || !bi) return false;
     if (ai.from !== bi.from || ai.to !== bi.to || ai.nightlyPrice !== bi.nightlyPrice) return false;
+    if ((ai.label ?? "") !== (bi.label ?? "")) return false;
+  }
+  return true;
+}
+
+function sameManualBlockedPeriods(a: ManualBlockedPeriod[], b: ManualBlockedPeriod[]) {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const ai = a[i];
+    const bi = b[i];
+    if (!ai || !bi) return false;
+    if (ai.from !== bi.from || ai.to !== bi.to || ai.comment !== bi.comment) return false;
   }
   return true;
 }
@@ -202,6 +291,9 @@ const schema = z
     pricingYear: z.number().finite().int().min(2000, "2000–2100").max(2100, "2000–2100"),
     pricingDefaultNightlyPrice: z.number().finite().int().min(0, "≥ 0"),
 
+    // Disponibilités
+    availabilityIcalUrl: z.string().optional(),
+
     // Ménage
     cleaningIncluded: z.boolean().default(false),
     cleaningPrice: z.number().finite().int().min(0, "≥ 0").optional(),
@@ -232,6 +324,12 @@ const schema = z
     if (values.cleaningIncluded && typeof values.cleaningPrice !== "number") {
       ctx.addIssue({ code: "custom", path: ["cleaningPrice"], message: "Requis si ménage = oui" });
     }
+
+    const ical = typeof values.availabilityIcalUrl === "string" ? values.availabilityIcalUrl.trim() : "";
+    if (ical) {
+      const ok = z.string().url().safeParse(ical).success;
+      if (!ok) ctx.addIssue({ code: "custom", path: ["availabilityIcalUrl"], message: "URL iCal invalide" });
+    }
   });
 
 type FormValues = z.infer<typeof schema>;
@@ -255,6 +353,16 @@ export default function OnboardingPage() {
   const [pricingAnchor, setPricingAnchor] = useState<Date | null>(null);
   const [pricingOverrides, setPricingOverrides] = useState<PricingOverride[]>([]);
   const [pricingApplyPrice, setPricingApplyPrice] = useState<number>(200);
+  const [pricingApplyLabel, setPricingApplyLabel] = useState<string>("");
+  const [pricingMonth, setPricingMonth] = useState<Date>(() => new Date(new Date().getFullYear(), 0, 1));
+  const pricingMonthTouchedRef = useRef(false);
+  const [manualBlockedPeriods, setManualBlockedPeriods] = useState<ManualBlockedPeriod[]>([]);
+  const [blockComment, setBlockComment] = useState<string>("");
+  const [blockError, setBlockError] = useState<string>("");
+
+  const [icalBlockedRanges, setIcalBlockedRanges] = useState<BlockedRange[]>([]);
+  const [icalBlockedLoading, setIcalBlockedLoading] = useState(false);
+  const [icalBlockedError, setIcalBlockedError] = useState<string>("");
 
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState("");
@@ -280,6 +388,7 @@ export default function OnboardingPage() {
       bathrooms: 1,
       pricingYear: new Date().getFullYear(),
       pricingDefaultNightlyPrice: 200,
+      availabilityIcalUrl: "",
       cleaningIncluded: false,
     },
     mode: "onTouched",
@@ -287,6 +396,15 @@ export default function OnboardingPage() {
 
   const v = watch();
   const pricingStats = computePricingMinMax(v.pricingDefaultNightlyPrice, pricingOverrides);
+
+  // Re-centre le calendrier quand l'année change (DayPicker conserve le mois précédent en mode uncontrolled).
+  useEffect(() => {
+    if (typeof v.pricingYear !== "number" || !Number.isFinite(v.pricingYear)) return;
+    const year = Math.trunc(v.pricingYear);
+    if (!Number.isFinite(year)) return;
+    pricingMonthTouchedRef.current = false;
+    setPricingMonth(new Date(year, 0, 1));
+  }, [v.pricingYear]);
 
   // Re-normalise les overrides si l'année / le prix par défaut change
   useEffect(() => {
@@ -300,6 +418,15 @@ export default function OnboardingPage() {
     });
   }, [v.pricingYear, v.pricingDefaultNightlyPrice, setPricingOverrides]);
 
+  // Re-normalise les blocages manuels si l'année change
+  useEffect(() => {
+    if (!Number.isFinite(v.pricingYear) || !Number.isInteger(v.pricingYear)) return;
+    setManualBlockedPeriods((prev) => {
+      const next = normalizeManualBlockedPeriods(v.pricingYear, prev);
+      return sameManualBlockedPeriods(prev, next) ? prev : next;
+    });
+  }, [v.pricingYear, setManualBlockedPeriods]);
+
   // Initialise le prix d'application depuis le prix par défaut
   useEffect(() => {
     if (!Number.isFinite(v.pricingDefaultNightlyPrice) || !Number.isInteger(v.pricingDefaultNightlyPrice))
@@ -308,6 +435,75 @@ export default function OnboardingPage() {
       Number.isFinite(prev) && Number.isInteger(prev) && prev >= 0 ? prev : v.pricingDefaultNightlyPrice
     );
   }, [v.pricingDefaultNightlyPrice]);
+
+  // Prévisualisation des dates bloquées via iCal
+  useEffect(() => {
+    const url = typeof v.availabilityIcalUrl === "string" ? v.availabilityIcalUrl.trim() : "";
+
+    setIcalBlockedError("");
+    if (!url) {
+      setIcalBlockedRanges([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    pricingMonthTouchedRef.current = false;
+
+    (async () => {
+      try {
+        setIcalBlockedLoading(true);
+        const res = await fetch(`/api/ical/blocked-ranges?url=${encodeURIComponent(url)}`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error("failed");
+        const data = (await res.json().catch(() => ({}))) as { ranges?: BlockedRange[] };
+        setIcalBlockedRanges(Array.isArray(data.ranges) ? data.ranges : []);
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        setIcalBlockedRanges([]);
+        setIcalBlockedError("Impossible de charger l’iCal.");
+      } finally {
+        setIcalBlockedLoading(false);
+      }
+    })();
+
+    return () => controller.abort();
+  }, [v.availabilityIcalUrl]);
+
+  // Si on charge un iCal et que le mois courant n'affiche aucun blocage,
+  // on se positionne automatiquement sur le 1er mois indisponible de l'année.
+  useEffect(() => {
+    if (pricingMonthTouchedRef.current) return;
+    if (!icalBlockedRanges.length) return;
+
+    const year =
+      typeof v.pricingYear === "number" && Number.isFinite(v.pricingYear)
+        ? Math.trunc(v.pricingYear)
+        : new Date().getFullYear();
+    const yearStart = startOfDay(new Date(year, 0, 1));
+    const yearEnd = startOfDay(new Date(year, 11, 31));
+
+    const within = icalBlockedRanges
+      .map((r) => {
+        const from = startOfDay(parseISO(String(r?.from || "")));
+        const to = startOfDay(parseISO(String(r?.to || "")));
+        if (!isValid(from) || !isValid(to)) return null;
+        if (to < yearStart || from > yearEnd) return null;
+        return { from, to };
+      })
+      .filter((x): x is { from: Date; to: Date } => Boolean(x))
+      .sort((a, b) => a.from.getTime() - b.from.getTime());
+
+    const first = within[0];
+    if (!first) return;
+
+    const monthStart = startOfMonth(pricingMonth);
+    const monthEnd = endOfMonth(pricingMonth);
+    const hasInMonth = within.some((r) => r.from <= monthEnd && monthStart <= r.to);
+    if (hasInMonth) return;
+
+    setPricingMonth(startOfMonth(first.from));
+  }, [icalBlockedRanges, v.pricingYear, pricingMonth]);
 
   // Suggestions pré-remplies pour aider la saisie
   const suggestedQuickHighlights = [
@@ -453,6 +649,10 @@ export default function OnboardingPage() {
       fd.append("pricingYear", String(formValues.pricingYear));
       fd.append("pricingDefaultNightlyPrice", String(formValues.pricingDefaultNightlyPrice));
       fd.append("pricingOverrides", JSON.stringify(pricingOverrides));
+      fd.append("manualBlockedPeriods", JSON.stringify(manualBlockedPeriods));
+      if (typeof formValues.availabilityIcalUrl === "string" && formValues.availabilityIcalUrl.trim()) {
+        fd.append("availabilityIcalUrl", formValues.availabilityIcalUrl.trim());
+      }
 
       // Ménage
       fd.append("cleaningIncluded", String(Boolean(formValues.cleaningIncluded)));
@@ -521,6 +721,35 @@ export default function OnboardingPage() {
     })
     .filter((x): x is { from: Date; to: Date } => !!x);
 
+  const manualBlockedMatchers = manualBlockedPeriods
+    .map((p) => {
+      const from = startOfDay(parseISO(String(p?.from || "")));
+      const to = startOfDay(parseISO(String(p?.to || "")));
+      if (!isValid(from) || !isValid(to)) return null;
+      return { from, to };
+    })
+    .filter((x): x is { from: Date; to: Date } => !!x);
+
+  const icalBlockedMatchers = icalBlockedRanges
+    .map((r) => {
+      const from = startOfDay(parseISO(String(r?.from || "")));
+      const to = startOfDay(parseISO(String(r?.to || "")));
+      if (!isValid(from) || !isValid(to)) return null;
+      return { from, to };
+    })
+    .filter((x): x is { from: Date; to: Date } => !!x);
+
+  const icalBlockedInYear = (() => {
+    if (!icalBlockedMatchers.length) return [];
+    const yearStart = startOfDay(new Date(pricingYear, 0, 1));
+    const yearEnd = startOfDay(new Date(pricingYear, 11, 31));
+    return icalBlockedMatchers
+      .filter((r) => !(r.to < yearStart || r.from > yearEnd))
+      .sort((a, b) => a.from.getTime() - b.from.getTime());
+  })();
+
+  const nextIcalRangeInYear = icalBlockedInYear[0] ?? null;
+
   const pricingSelectionMatcher = pricingSelection
     ? { from: pricingSelection.from, to: pricingSelection.to }
     : undefined;
@@ -530,23 +759,45 @@ export default function OnboardingPage() {
     const ymd = toYmd(day.date);
     const price = getNightlyPriceForDay(ymd, pricingDefaultNightlyPrice, pricingOverrides);
     const isOverride = Boolean(modifiers?.override);
+    const isIcalBlocked = Boolean(modifiers?.blockedIcal);
+    const isManualBlocked = Boolean(modifiers?.blockedManual);
     const isSelected = Boolean(modifiers?.selection);
+    const isToday = Boolean(modifiers?.today);
+    const tone = isIcalBlocked ? "ical" : isManualBlocked ? "manual" : isOverride ? "override" : "default";
     return (
       <button
         {...buttonProps}
         className={[
           className || "",
           "flex h-10 w-10 flex-col items-center justify-center rounded-xl text-[11px] leading-none transition",
-          "hover:bg-slate-50",
-          isOverride ? "bg-amber-100 text-amber-950" : "bg-white text-slate-900",
-          isSelected ? "ring-2 ring-slate-900" : "ring-1 ring-slate-200",
+          tone === "ical"
+            ? "bg-red-200 text-red-950 hover:bg-red-200"
+            : tone === "manual"
+              ? "bg-rose-200 text-rose-950 hover:bg-rose-200"
+              : tone === "override"
+                ? "bg-amber-100 text-amber-950 hover:bg-amber-100"
+                : "bg-white text-slate-900 hover:bg-slate-50",
+          isSelected
+            ? "ring-2 ring-slate-900"
+            : tone === "ical"
+              ? "ring-1 ring-red-300"
+              : tone === "manual"
+                ? "ring-1 ring-rose-300"
+                : "ring-1 ring-slate-200",
+          isToday ? "shadow-[0_0_0_2px_#bd9254]" : "",
         ].join(" ")}
       >
         <span className="font-semibold">{children}</span>
         <span
           className={[
             "mt-0.5 text-[9px] font-medium",
-            isOverride ? "text-amber-900" : "text-slate-500",
+            tone === "ical"
+              ? "text-red-900"
+              : tone === "manual"
+                ? "text-rose-900"
+                : tone === "override"
+                  ? "text-amber-900"
+                  : "text-slate-500",
           ].join(" ")}
         >
           {price}€
@@ -728,17 +979,65 @@ export default function OnboardingPage() {
                     </Field>
                   </div>
 
-	                  <div className="mt-4 grid gap-4 grid-cols-1 ">
-	                    <div className="overflow-hidden rounded-2xl bg-white p-2 ring-1 ring-slate-200">
-	                      <DayPicker
-	                        locale={fr}
+                  <div className="mt-4">
+                    <Field label="Lien iCal (optionnel)" error={errors.availabilityIcalUrl?.message}>
+                      <Input
+                        type="url"
+                        placeholder="https://calendar.avantio.pro/... .ics"
+                        {...register("availabilityIcalUrl")}
+                      />
+                    </Field>
+                    {typeof v.availabilityIcalUrl === "string" && v.availabilityIcalUrl.trim() ? (
+                      <p className={["mt-2 text-xs", icalBlockedError ? "text-red-600" : "text-slate-500"].join(" ")}>
+                        {icalBlockedLoading
+                          ? "Chargement des indisponibilités iCal…"
+                          : icalBlockedError
+                            ? icalBlockedError
+                            : icalBlockedInYear.length
+                              ? `${icalBlockedRanges.length} période(s) indisponible(s) détectée(s) via iCal (${icalBlockedInYear.length} sur ${pricingYear}).`
+                              : `${icalBlockedRanges.length} période(s) indisponible(s) détectée(s) via iCal (aucune sur ${pricingYear}).`}
+                      </p>
+                    ) : null}
+                    {typeof v.availabilityIcalUrl === "string" &&
+                    v.availabilityIcalUrl.trim() &&
+                    !icalBlockedLoading &&
+                    !icalBlockedError &&
+                    nextIcalRangeInYear ? (
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs text-slate-500">
+                          Prochaine indisponibilité: {toYmd(nextIcalRangeInYear.from)} → {toYmd(nextIcalRangeInYear.to)}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            pricingMonthTouchedRef.current = true;
+                            setPricingMonth(startOfMonth(nextIcalRangeInYear.from));
+                          }}
+                          className="rounded-full bg-white px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-900 ring-1 ring-slate-200 hover:bg-slate-50"
+                        >
+                          Afficher sur le calendrier →
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+
+		                  <div className="mt-4 grid gap-4 grid-cols-1">
+		                    <div className="overflow-hidden rounded-2xl bg-white p-2 ring-1 ring-slate-200">
+		                      <DayPicker
+		                        locale={fr}
 	                        weekStartsOn={1}
                         showOutsideDays={false}
-                        defaultMonth={new Date(pricingYear, 0, 1)}
+                        month={pricingMonth}
+                        onMonthChange={(m) => {
+                          pricingMonthTouchedRef.current = true;
+                          setPricingMonth(m);
+                        }}
                         startMonth={new Date(pricingYear, 0, 1)}
                         endMonth={new Date(pricingYear, 11, 1)}
                         modifiers={{
                           override: pricingOverrideMatchers,
+                          blockedIcal: icalBlockedMatchers,
+                          blockedManual: manualBlockedMatchers,
                           ...(pricingSelectionMatcher ? { selection: pricingSelectionMatcher } : {}),
                         }}
                         components={{ DayButton: PricingDayButton }}
@@ -812,11 +1111,11 @@ export default function OnboardingPage() {
 	                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
 	                          Mode de sélection
 	                        </p>
-	                        <div className="mt-2 flex flex-wrap gap-2">
-	                          {([
-	                            ["day", "Jour"],
-	                            ["week", "Semaine"],
-	                            ["month", "Mois"],
+		                        <div className="mt-2 flex flex-wrap gap-2">
+		                          {([
+		                            ["day", "Jour"],
+		                            ["week", "Semaine"],
+		                            ["month", "Mois"],
 	                          ] as const).map(([key, label]) => (
 	                            <button
 	                              key={key}
@@ -830,30 +1129,72 @@ export default function OnboardingPage() {
 	                              ].join(" ")}
 	                            >
 	                              {label}
-	                            </button>
-	                          ))}
-	                        </div>
-	                      </div>
-	                    </div>
+		                            </button>
+		                          ))}
+		                        </div>
+
+		                        <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-slate-600">
+		                          {icalBlockedMatchers.length ? (
+		                            <span className="inline-flex items-center gap-2">
+		                              <span className="h-3 w-3 rounded-sm bg-red-200 ring-1 ring-red-300" />
+		                              <span>iCal</span>
+		                            </span>
+		                          ) : null}
+		                          {manualBlockedPeriods.length ? (
+		                            <span className="inline-flex items-center gap-2">
+		                              <span className="h-3 w-3 rounded-sm bg-rose-200 ring-1 ring-rose-300" />
+		                              <span>Bloqué (manuel)</span>
+		                            </span>
+		                          ) : null}
+		                          {pricingOverrides.length ? (
+		                            <span className="inline-flex items-center gap-2">
+		                              <span className="h-3 w-3 rounded-sm bg-amber-100 ring-1 ring-amber-200" />
+		                              <span>Prix personnalisé</span>
+		                            </span>
+		                          ) : null}
+		                        </div>
+		                      </div>
+		                    </div>
 
 	                    <div className="space-y-3">
 	                      <div className="rounded-2xl bg-white p-3 ring-1 ring-slate-200">
 	                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
 	                          Sélection
 	                        </p>
-                        {pricingSelection ? (
-                          <p className="mt-1 text-sm font-medium text-slate-900">
-                            {toYmd(pricingSelection.from)} → {toYmd(pricingSelection.to)}
-                          </p>
-                        ) : (
-                          <p className="mt-1 text-sm text-slate-600">Clique sur une date.</p>
-                        )}
+	                        {pricingSelection ? (
+	                          <div className="mt-1 flex items-baseline justify-between gap-3">
+	                            <p className="text-sm font-medium text-slate-900">
+	                              {toYmd(pricingSelection.from)} → {toYmd(pricingSelection.to)}
+	                            </p>
+	                            {pricingApplyLabel.trim() ? (
+	                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-red-600">
+	                                {pricingApplyLabel.trim()}
+	                              </p>
+	                            ) : null}
+	                          </div>
+	                        ) : (
+	                          <p className="mt-1 text-sm text-slate-600">Clique sur une date.</p>
+	                        )}
 
-                        <div className="mt-3 grid gap-2">
-                          <label className="text-[11px] font-medium uppercase tracking-[0.2em] text-slate-500">
-                            Prix (€/nuit)
-                          </label>
-                          <input
+	                        <div className="mt-3 grid gap-2">
+	                          <label className="text-[11px] font-medium uppercase tracking-[0.2em] text-slate-500">
+	                            Nom de période (optionnel)
+	                          </label>
+	                          <input
+	                            type="text"
+	                            maxLength={80}
+	                            value={pricingApplyLabel}
+	                            onChange={(e) => setPricingApplyLabel(e.target.value)}
+	                            placeholder="Ex: Prix Noël"
+	                            className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-800 outline-none focus:border-slate-300 focus:bg-white"
+	                          />
+	                        </div>
+
+	                        <div className="mt-3 grid gap-2">
+	                          <label className="text-[11px] font-medium uppercase tracking-[0.2em] text-slate-500">
+	                            Prix (€/nuit)
+	                          </label>
+	                          <input
                             type="number"
                             min={0}
                             step={1}
@@ -863,10 +1204,10 @@ export default function OnboardingPage() {
                           />
                         </div>
 
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            disabled={
+	                        <div className="mt-3 flex flex-wrap gap-2">
+	                          <button
+	                            type="button"
+	                            disabled={
                               !pricingSelection ||
                               !Number.isFinite(pricingApplyPrice) ||
                               !Number.isInteger(pricingApplyPrice) ||
@@ -879,18 +1220,19 @@ export default function OnboardingPage() {
                               if (!Number.isFinite(pricingApplyPrice) || !Number.isInteger(pricingApplyPrice))
                                 return;
 
-                              const next = normalizePricingOverrides(pricingYear, pricingDefaultNightlyPrice, [
-                                ...pricingOverrides,
-                                {
-                                  from: toYmd(pricingSelection.from),
-                                  to: toYmd(pricingSelection.to),
-                                  nightlyPrice: pricingApplyPrice,
-                                },
-                              ]);
-                              setPricingOverrides(next);
-                            }}
-                            className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
-                          >
+	                              const next = normalizePricingOverrides(pricingYear, pricingDefaultNightlyPrice, [
+	                                ...pricingOverrides,
+	                                {
+	                                  from: toYmd(pricingSelection.from),
+	                                  to: toYmd(pricingSelection.to),
+	                                  nightlyPrice: pricingApplyPrice,
+	                                  label: pricingApplyLabel.trim() || undefined,
+	                                },
+	                              ]);
+	                              setPricingOverrides(next);
+	                            }}
+	                            className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+	                          >
                             Appliquer
                           </button>
                           <button
@@ -898,13 +1240,92 @@ export default function OnboardingPage() {
                             onClick={() => {
                               setPricingSelection(null);
                               setPricingAnchor(null);
+                              setPricingApplyLabel("");
                             }}
                             className="rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
                           >
-                            Effacer sélection
-                          </button>
-                        </div>
-                      </div>
+	                            Effacer sélection
+	                          </button>
+	                        </div>
+
+                          <div className="mt-4 border-t border-slate-100 pt-4">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                              Bloquer ces dates (manuel)
+                            </p>
+
+                            <div className="mt-2 grid gap-2">
+                              <label className="text-[11px] font-medium uppercase tracking-[0.2em] text-slate-500">
+                                Commentaire
+                              </label>
+                              <input
+                                type="text"
+                                maxLength={120}
+                                value={blockComment}
+                                onChange={(e) => {
+                                  setBlockComment(e.target.value);
+                                  if (blockError) setBlockError("");
+                                }}
+                                placeholder="Ex: Maintenance, privatisation…"
+                                className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-800 outline-none focus:border-slate-300 focus:bg-white"
+                              />
+                            </div>
+
+                            {blockError ? <p className="mt-2 text-xs text-red-600">{blockError}</p> : null}
+
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                disabled={
+                                  !pricingSelection ||
+                                  !blockComment.trim() ||
+                                  (typeof v.availabilityIcalUrl === "string" &&
+                                    v.availabilityIcalUrl.trim().length > 0 &&
+                                    icalBlockedLoading)
+                                }
+                                onClick={() => {
+                                  setBlockError("");
+                                  if (!pricingSelection) return;
+                                  const comment = blockComment.trim();
+                                  if (!comment) {
+                                    setBlockError("Commentaire requis pour bloquer.");
+                                    return;
+                                  }
+
+                                  if (
+                                    icalBlockedMatchers.length > 0 &&
+                                    icalBlockedMatchers.some((r) => rangesOverlap(pricingSelection, r))
+                                  ) {
+                                    setBlockError("Impossible: la sélection chevauche des dates iCal (rouge).");
+                                    return;
+                                  }
+
+                                  const next = normalizeManualBlockedPeriods(pricingYear, [
+                                    ...manualBlockedPeriods,
+                                    {
+                                      from: toYmd(pricingSelection.from),
+                                      to: toYmd(pricingSelection.to),
+                                      comment,
+                                    },
+                                  ]);
+                                  setManualBlockedPeriods(next);
+                                }}
+                                className="rounded-full bg-rose-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                              >
+                                Bloquer
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setBlockComment("");
+                                  setBlockError("");
+                                }}
+                                className="rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+                              >
+                                Effacer commentaire
+                              </button>
+                            </div>
+                          </div>
+	                      </div>
 
                       <div className="space-y-2">
                         <div className="flex items-center justify-between gap-3">
@@ -923,20 +1344,27 @@ export default function OnboardingPage() {
                         </div>
 
                         {pricingOverrides.length ? (
-                          <ul className="space-y-2">
-                            {pricingOverrides.map((o, idx) => (
-                              <li
-                                key={`${o.from}-${o.to}-${o.nightlyPrice}-${idx}`}
-                                className="flex items-start justify-between gap-3 rounded-2xl bg-white px-3 py-2 ring-1 ring-slate-200"
-                              >
-                                <div className="min-w-0">
-                                  <p className="truncate text-xs font-semibold text-slate-900">
-                                    {o.from} → {o.to}
-                                  </p>
-                                  <p className="text-xs text-slate-600">
-                                    {o.nightlyPrice.toLocaleString("fr-FR")} € / nuit
-                                  </p>
-                                </div>
+	                          <ul className="space-y-2">
+	                            {pricingOverrides.map((o, idx) => (
+	                              <li
+	                                key={`${o.from}-${o.to}-${o.nightlyPrice}-${o.label ?? ""}-${idx}`}
+	                                className="flex items-start justify-between gap-3 rounded-2xl bg-white px-3 py-2 ring-1 ring-slate-200"
+	                              >
+	                                <div className="min-w-0 flex-1">
+	                                  <div className="flex items-baseline justify-between gap-3">
+	                                    <p className="truncate text-xs font-semibold text-slate-900">
+	                                      {o.from} → {o.to}
+	                                    </p>
+	                                    {o.label ? (
+	                                      <p className="shrink-0 text-xs font-semibold uppercase tracking-[0.18em] text-red-600">
+	                                        {o.label}
+	                                      </p>
+	                                    ) : null}
+	                                  </div>
+	                                  <p className="text-xs text-slate-600">
+	                                    {o.nightlyPrice.toLocaleString("fr-FR")} € / nuit
+	                                  </p>
+	                                </div>
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -949,15 +1377,66 @@ export default function OnboardingPage() {
                               </li>
                             ))}
                           </ul>
-                        ) : (
-                          <p className="text-sm text-slate-600">
-                            Aucune période personnalisée pour l’instant.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+	                        ) : (
+	                          <p className="text-sm text-slate-600">
+	                            Aucune période personnalisée pour l’instant.
+	                          </p>
+	                        )}
+	                      </div>
+
+	                      <div className="space-y-2">
+	                        <div className="flex items-center justify-between gap-3">
+	                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+	                            Dates bloquées (manuel)
+	                          </p>
+	                          {manualBlockedPeriods.length ? (
+	                            <button
+	                              type="button"
+	                              onClick={() => setManualBlockedPeriods([])}
+	                              className="text-xs font-semibold text-slate-600 hover:text-slate-900"
+	                            >
+	                              Tout effacer
+	                            </button>
+	                          ) : null}
+	                        </div>
+
+	                        {manualBlockedPeriods.length ? (
+	                          <ul className="space-y-2">
+	                            {manualBlockedPeriods.map((p, idx) => (
+	                              <li
+	                                key={`${p.from}-${p.to}-${p.comment}-${idx}`}
+	                                className="flex items-start justify-between gap-3 rounded-2xl bg-white px-3 py-2 ring-1 ring-slate-200"
+	                              >
+	                                <div className="min-w-0 flex-1">
+	                                  <div className="flex items-baseline justify-between gap-3">
+	                                    <p className="truncate text-xs font-semibold text-slate-900">
+	                                      {p.from} → {p.to}
+	                                    </p>
+	                                    <p className="shrink-0 text-xs font-semibold uppercase tracking-[0.18em] text-rose-600">
+	                                      Bloqué
+	                                    </p>
+	                                  </div>
+	                                  <p className="text-xs text-slate-600">{p.comment}</p>
+	                                </div>
+	                                <button
+	                                  type="button"
+	                                  onClick={() =>
+	                                    setManualBlockedPeriods((prev) => prev.filter((_, i) => i !== idx))
+	                                  }
+	                                  className="rounded-full bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100"
+	                                >
+	                                  Supprimer
+	                                </button>
+	                              </li>
+	                            ))}
+	                          </ul>
+	                        ) : (
+	                          <p className="text-sm text-slate-600">Aucune date bloquée pour l’instant.</p>
+	                        )}
+	                      </div>
+	                    </div>
+	                  </div>
+	                </div>
 
                 <Field label="Description courte" error={errors.shortDescription?.message}>
                   <Textarea rows={3} placeholder="2–3 phrases…" {...register("shortDescription")} />
@@ -1226,7 +1705,7 @@ export default function OnboardingPage() {
                             key={`${img.name}-${img.size}-${idx}`}
                             className="overflow-hidden rounded-2xl ring-1 ring-slate-100"
                           >
-                            <div className="relative aspect-[4/3] bg-slate-50">
+                            <div className="relative aspect-4/3 bg-slate-50">
                               <Image
                                 src={img.url}
                                 alt={img.name}

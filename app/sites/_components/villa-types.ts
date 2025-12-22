@@ -1,5 +1,7 @@
 // app/sites/_components/villa-types.ts
 
+import type { PricingCalendar } from "../lib/pricing";
+
 export type DistanceItem = {
   label: string;
   by: "car" | "walk" | "boat";
@@ -48,7 +50,10 @@ export type Villa = {
   priceMin?: number;
   priceMax?: number;
 
+  pricingCalendars?: PricingCalendar[] | null;
+
   availabilityIcalUrl?: string | null;
+  manualBlockedPeriods?: Array<{ from?: string; to?: string; comment?: string | null }> | null;
 
   shortDescription: string;
   longDescription: string;

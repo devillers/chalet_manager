@@ -63,6 +63,50 @@ export const villa = defineType({
       type: "url",
       group: "owner",
     }),
+    defineField({
+      name: "manualBlockedPeriods",
+      title: "Blocages manuels (optionnel)",
+      type: "array",
+      group: "owner",
+      description: "Permet de bloquer des dates en plus de l’iCal (maintenance, privatisation, etc.).",
+      of: [
+        {
+          type: "object",
+          name: "manualBlockedPeriod",
+          title: "Blocage",
+          fields: [
+            defineField({
+              name: "from",
+              title: "Du",
+              type: "date",
+              validation: (Rule) => Rule.required(),
+            }),
+            defineField({
+              name: "to",
+              title: "Au",
+              type: "date",
+              validation: (Rule) => Rule.required(),
+            }),
+            defineField({
+              name: "comment",
+              title: "Commentaire",
+              type: "string",
+              validation: (Rule) => Rule.max(120),
+            }),
+          ],
+          preview: {
+            select: { from: "from", to: "to", comment: "comment" },
+            prepare({ from, to, comment }: any) {
+              const c = typeof comment === "string" ? comment.trim() : "";
+              return {
+                title: `${from ?? "—"} → ${to ?? "—"}`,
+                subtitle: c ? c : "Blocage manuel",
+              };
+            },
+          },
+        },
+      ],
+    }),
 
     // ADRESSE -------------------------------------------------------------
     defineField({
@@ -228,15 +272,23 @@ export const villa = defineType({
                       type: "number",
                       validation: (Rule) => Rule.required().integer().min(0),
                     }),
+                    defineField({
+                      name: "label",
+                      title: "Nom de période (optionnel)",
+                      type: "string",
+                      description: "Ex: Prix Noël, Vacances d’hiver, Haute saison…",
+                      validation: (Rule) => Rule.max(80),
+                    }),
                   ],
                   preview: {
-                    select: { from: "from", to: "to", nightlyPrice: "nightlyPrice" },
-                    prepare({ from, to, nightlyPrice }: any) {
+                    select: { from: "from", to: "to", nightlyPrice: "nightlyPrice", label: "label" },
+                    prepare({ from, to, nightlyPrice, label }: any) {
+                      const labelStr = typeof label === "string" ? label.trim() : "";
                       return {
                         title: `${from ?? "—"} → ${to ?? "—"}`,
                         subtitle:
                           typeof nightlyPrice === "number"
-                            ? `${nightlyPrice.toLocaleString("fr-FR")} € / nuit`
+                            ? `${nightlyPrice.toLocaleString("fr-FR")} € / nuit${labelStr ? ` • ${labelStr}` : ""}`
                             : "—",
                       };
                     },

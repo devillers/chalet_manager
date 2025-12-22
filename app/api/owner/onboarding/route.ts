@@ -1,8 +1,10 @@
 // app/api/owner/onboarding/route.ts
 import { NextResponse } from "next/server";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { createClient } from "@sanity/client";
 import { randomUUID } from "crypto";
 import { addDays, differenceInCalendarDays, format, isValid, parseISO, startOfDay } from "date-fns";
+import { getBlockedRangesFromIcal } from "@/app/sites/lib/getBlockedRangesFromIcal";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -135,8 +137,8 @@ type SanityDistanceItem = {
 };
 type TestimonialItem = { name?: string; date?: string; text?: string; rating?: number };
 
-type PricingOverrideInput = { from?: unknown; to?: unknown; nightlyPrice?: unknown };
-type PricingOverride = { from: string; to: string; nightlyPrice: number };
+type PricingOverrideInput = { from?: unknown; to?: unknown; nightlyPrice?: unknown; label?: unknown };
+type PricingOverride = { from: string; to: string; nightlyPrice: number; label?: string };
 type SanityPricingOverride = PricingOverride & { _key: string; _type: "pricingOverride" };
 type SanityPricingCalendar = {
   _key: string;
@@ -145,6 +147,10 @@ type SanityPricingCalendar = {
   defaultNightlyPrice: number;
   overrides?: SanityPricingOverride[];
 };
+
+type ManualBlockedPeriodInput = { from?: unknown; to?: unknown; comment?: unknown };
+type ManualBlockedPeriod = { from: string; to: string; comment: string };
+type SanityManualBlockedPeriod = ManualBlockedPeriod & { _key: string; _type: "manualBlockedPeriod" };
 
 type VillaPayload = {
   _type: "villa";
@@ -167,9 +173,11 @@ type VillaPayload = {
   // pricing
   priceMin: number;
   priceMax?: number;
+  availabilityIcalUrl?: string;
   cleaningIncluded?: boolean;
   cleaningPrice?: number;
   pricingCalendars?: SanityPricingCalendar[];
+  manualBlockedPeriods?: SanityManualBlockedPeriod[];
 
   // content
   shortDescription: string;
@@ -227,13 +235,15 @@ export async function POST(req: Request) {
     const bathrooms = n(fd, "bathrooms");
 
     // Grille tarifaire (nouveau) + fallback legacy (priceMin/priceMax)
-    const pricingYear = n(fd, "pricingYear");
-    const pricingDefaultNightlyPrice = n(fd, "pricingDefaultNightlyPrice");
-    const pricingOverridesInput = parseJsonArray<PricingOverrideInput>(fd, "pricingOverrides");
-    const legacyPriceMin = n(fd, "priceMin");
-    const legacyPriceMax = n(fd, "priceMax");
-    const cleaningIncluded = b(fd, "cleaningIncluded");
-    const cleaningPrice = n(fd, "cleaningPrice");
+	    const pricingYear = n(fd, "pricingYear");
+	    const pricingDefaultNightlyPrice = n(fd, "pricingDefaultNightlyPrice");
+	    const pricingOverridesInput = parseJsonArray<PricingOverrideInput>(fd, "pricingOverrides");
+	    const manualBlockedPeriodsInput = parseJsonArray<ManualBlockedPeriodInput>(fd, "manualBlockedPeriods");
+	    const legacyPriceMin = n(fd, "priceMin");
+	    const legacyPriceMax = n(fd, "priceMax");
+	    const availabilityIcalUrl = s(fd, "availabilityIcalUrl");
+	    const cleaningIncluded = b(fd, "cleaningIncluded");
+	    const cleaningPrice = n(fd, "cleaningPrice");
 
     const quickHighlights = parseJsonArray<string>(fd, "quickHighlights").map((s) => String(s || "").trim()).filter(Boolean);
     const keyAmenities = parseJsonArray<string>(fd, "keyAmenities").map((s) => String(s || "").trim()).filter(Boolean);
@@ -340,9 +350,10 @@ export async function POST(req: Request) {
         { status: 400 }
       );
 
-    let priceMin: number | undefined;
-    let priceMax: number | undefined;
-    let nextPricingCalendars: SanityPricingCalendar[] | undefined = undefined;
+	    let priceMin: number | undefined;
+	    let priceMax: number | undefined;
+	    let nextPricingCalendars: SanityPricingCalendar[] | undefined = undefined;
+	    let nextManualBlockedPeriods: ManualBlockedPeriod[] | undefined = undefined;
 
     const hasPricingCalendar =
       typeof pricingYear === "number" &&
@@ -371,6 +382,7 @@ export async function POST(req: Request) {
       );
 
       const dayPrices = Array.from({ length: daysInYear }, () => pricingDefaultNightlyPrice);
+      const dayLabels: Array<string | undefined> = Array.from({ length: daysInYear }, () => undefined);
 
       // Applique overrides (ordre = priorité, le dernier gagne)
       for (const raw of pricingOverridesInput) {
@@ -381,6 +393,15 @@ export async function POST(req: Request) {
             { status: 400 }
           );
         }
+
+        const labelRaw = typeof raw.label === "string" ? raw.label.trim() : "";
+        if (labelRaw.length > 80) {
+          return NextResponse.json(
+            { error: "pricingOverrides: label trop long (max 80 caractères)." },
+            { status: 400 }
+          );
+        }
+        const label = labelRaw ? labelRaw : undefined;
 
         const fromDate = parseYmdDate(raw.from);
         const toDate = parseYmdDate(raw.to);
@@ -416,23 +437,35 @@ export async function POST(req: Request) {
 
         for (let i = fromIdx; i <= toIdx; i++) {
           dayPrices[i] = nightlyPrice;
+          dayLabels[i] = label;
         }
       }
 
-      // Normalise en ranges (uniquement quand prix != default)
+      // Normalise en ranges (prix != default OU label défini)
       const normalized: PricingOverride[] = [];
       for (let i = 0; i < dayPrices.length; i++) {
         const price = dayPrices[i];
-        if (price === pricingDefaultNightlyPrice) continue;
+        const label = dayLabels[i];
+        const isCustom = price !== pricingDefaultNightlyPrice || (typeof label === "string" && label.length > 0);
+        if (!isCustom) continue;
 
         const startIdx = i;
-        while (i + 1 < dayPrices.length && dayPrices[i + 1] === price) i++;
+        while (i + 1 < dayPrices.length) {
+          const nextPrice = dayPrices[i + 1];
+          const nextLabel = dayLabels[i + 1];
+          const nextIsCustom =
+            nextPrice !== pricingDefaultNightlyPrice || (typeof nextLabel === "string" && nextLabel.length > 0);
+          if (!nextIsCustom) break;
+          if (nextPrice !== price) break;
+          if ((nextLabel ?? "") !== (label ?? "")) break;
+          i++;
+        }
         const endIdx = i;
 
         const from = format(addDays(yearStart, startIdx), "yyyy-MM-dd");
         const to = format(addDays(yearStart, endIdx), "yyyy-MM-dd");
 
-        normalized.push({ from, to, nightlyPrice: price });
+        normalized.push({ from, to, nightlyPrice: price, ...(label ? { label } : {}) });
       }
 
       const sanityCalendar: SanityPricingCalendar = {
@@ -444,11 +477,12 @@ export async function POST(req: Request) {
           ? normalized.map((o) => ({
               _key: randomUUID(),
               _type: "pricingOverride",
-              from: o.from,
-              to: o.to,
-              nightlyPrice: o.nightlyPrice,
-            }))
-          : undefined,
+	              from: o.from,
+	              to: o.to,
+	              nightlyPrice: o.nightlyPrice,
+	              label: o.label,
+	            }))
+	          : undefined,
       };
 
       // Min / max calculés sur l'année (default + overrides)
@@ -457,15 +491,92 @@ export async function POST(req: Request) {
       priceMax = Math.max(...prices);
       if (priceMax === priceMin) priceMax = undefined;
 
-      // Merge sur une villa existante (si on met à jour une autre année plus tard)
-      // -> upsert par année en conservant les autres.
-      // (sera finalisé après récupération de existingVilla)
-      nextPricingCalendars = [sanityCalendar];
-    } else {
-      // Fallback legacy
-      if (typeof legacyPriceMin !== "number" || legacyPriceMin < 0) {
-        return NextResponse.json({ error: "priceMin invalide (≥ 0)." }, { status: 400 });
-      }
+	      // Merge sur une villa existante (si on met à jour une autre année plus tard)
+	      // -> upsert par année en conservant les autres.
+	      // (sera finalisé après récupération de existingVilla)
+	      nextPricingCalendars = [sanityCalendar];
+
+	      // Blocages manuels (dans l'année sélectionnée)
+	      if (manualBlockedPeriodsInput.length > 0) {
+	        const dayComments: Array<string | undefined> = Array.from({ length: daysInYear }, () => undefined);
+
+	        for (const raw of manualBlockedPeriodsInput) {
+	          const commentRaw = typeof raw.comment === "string" ? raw.comment.trim() : "";
+	          if (!commentRaw) {
+	            return NextResponse.json(
+	              { error: "manualBlockedPeriods: commentaire requis." },
+	              { status: 400 }
+	            );
+	          }
+	          if (commentRaw.length > 120) {
+	            return NextResponse.json(
+	              { error: "manualBlockedPeriods: commentaire trop long (max 120 caractères)." },
+	              { status: 400 }
+	            );
+	          }
+
+	          const fromDate = parseYmdDate(raw.from);
+	          const toDate = parseYmdDate(raw.to);
+	          if (!fromDate || !toDate) {
+	            return NextResponse.json(
+	              { error: "manualBlockedPeriods: dates invalides (YYYY-MM-DD)." },
+	              { status: 400 }
+	            );
+	          }
+	          if (fromDate < yearStart || toDate > yearEnd) {
+	            return NextResponse.json(
+	              { error: "manualBlockedPeriods: dates hors année sélectionnée." },
+	              { status: 400 }
+	            );
+	          }
+	          if (fromDate > toDate) {
+	            return NextResponse.json(
+	              { error: "manualBlockedPeriods: 'from' doit être ≤ 'to'." },
+	              { status: 400 }
+	            );
+	          }
+
+	          const fromIdx = differenceInCalendarDays(fromDate, yearStart);
+	          const toIdx = differenceInCalendarDays(toDate, yearStart);
+	          if (fromIdx < 0 || toIdx >= daysInYear) {
+	            return NextResponse.json(
+	              { error: "manualBlockedPeriods: dates hors année sélectionnée." },
+	              { status: 400 }
+	            );
+	          }
+
+	          for (let i = fromIdx; i <= toIdx; i++) dayComments[i] = commentRaw;
+	        }
+
+	        const normalizedBlocks: ManualBlockedPeriod[] = [];
+	        for (let i = 0; i < dayComments.length; i++) {
+	          const comment = dayComments[i];
+	          if (!comment) continue;
+	          const startIdx = i;
+	          while (i + 1 < dayComments.length && dayComments[i + 1] === comment) i++;
+	          const endIdx = i;
+
+	          normalizedBlocks.push({
+	            from: format(addDays(yearStart, startIdx), "yyyy-MM-dd"),
+	            to: format(addDays(yearStart, endIdx), "yyyy-MM-dd"),
+	            comment,
+	          });
+	        }
+	        nextManualBlockedPeriods = normalizedBlocks;
+	      } else {
+	        nextManualBlockedPeriods = [];
+	      }
+	    } else {
+	      if (manualBlockedPeriodsInput.length > 0) {
+	        return NextResponse.json(
+	          { error: "manualBlockedPeriods: nécessite pricingYear valide." },
+	          { status: 400 }
+	        );
+	      }
+	      // Fallback legacy
+	      if (typeof legacyPriceMin !== "number" || legacyPriceMin < 0) {
+	        return NextResponse.json({ error: "priceMin invalide (≥ 0)." }, { status: 400 });
+	      }
       if (typeof legacyPriceMax === "number" && legacyPriceMax < legacyPriceMin) {
         return NextResponse.json({ error: "priceMax doit être ≥ priceMin." }, { status: 400 });
       }
@@ -477,13 +588,27 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Prix requis." }, { status: 400 });
     }
 
-    if (cleaningIncluded === true && typeof cleaningPrice !== "number") {
-      return NextResponse.json({ error: "cleaningPrice requis si ménage = oui." }, { status: 400 });
-    }
+	    if (cleaningIncluded === true && typeof cleaningPrice !== "number") {
+	      return NextResponse.json({ error: "cleaningPrice requis si ménage = oui." }, { status: 400 });
+	    }
 
-    // Images (optionnel)
-    const imageFiles = fd
-      .getAll("images")
+	    let nextAvailabilityIcalUrl: string | undefined = undefined;
+	    if (availabilityIcalUrl) {
+	      const normalized = availabilityIcalUrl.replace(/^webcals?:\/\//i, "https://");
+	      try {
+	        const parsed = new URL(normalized);
+	        if (!(parsed.protocol === "https:" || parsed.protocol === "http:")) {
+	          return NextResponse.json({ error: "availabilityIcalUrl invalide." }, { status: 400 });
+	        }
+	        nextAvailabilityIcalUrl = availabilityIcalUrl;
+	      } catch {
+	        return NextResponse.json({ error: "availabilityIcalUrl invalide." }, { status: 400 });
+	      }
+	    }
+
+	    // Images (optionnel)
+	    const imageFiles = fd
+	      .getAll("images")
       .filter((x): x is File => x instanceof File)
       .slice(0, 20);
 
@@ -564,24 +689,58 @@ export async function POST(req: Request) {
     }
 
     // 2) villa idempotent simple
-    const existingVilla = await client.fetch<{
-      _id: string;
-      slug?: string;
-      pricingCalendars?: SanityPricingCalendar[];
-    } | null>(
-      `*[_type=="villa" && ownerSite._ref==$ownerId && name==$name][0]{_id, "slug": slug.current, pricingCalendars}`,
-      { ownerId: ownerSiteId, name: villaName }
-    );
+	    const existingVilla = await client.fetch<{
+	      _id: string;
+	      slug?: string;
+	      availabilityIcalUrl?: string;
+	      pricingCalendars?: SanityPricingCalendar[];
+	    } | null>(
+	      `*[_type=="villa" && ownerSite._ref==$ownerId && name==$name][0]{_id, "slug": slug.current, availabilityIcalUrl, pricingCalendars}`,
+	      { ownerId: ownerSiteId, name: villaName }
+	    );
 
     // IMPORTANT: si la villa existe, on conserve son slug (évite de casser l’URL)
     const villaSlugBase = slugify(villaName);
-    const villaSlug = existingVilla?.slug
-      ? existingVilla.slug
-      : await ensureUniqueSlug(client, "villa", villaSlugBase);
+	    const villaSlug = existingVilla?.slug
+	      ? existingVilla.slug
+	      : await ensureUniqueSlug(client, "villa", villaSlugBase);
 
-    // Similar villas references (best-effort lookup by slug or name)
-    let similarRefs: SanityRef[] | undefined = undefined;
-    if (similarVillasSlugsOrNames.length > 0) {
+	    const effectiveIcalUrl =
+	      nextAvailabilityIcalUrl ||
+	      (typeof existingVilla?.availabilityIcalUrl === "string" ? existingVilla.availabilityIcalUrl : "");
+
+	    if (
+	      effectiveIcalUrl &&
+	      Array.isArray(nextManualBlockedPeriods) &&
+	      nextManualBlockedPeriods.length > 0
+	    ) {
+	      const icalRanges = await getBlockedRangesFromIcal(effectiveIcalUrl);
+	      const icalMatchers = icalRanges
+	        .map((r) => {
+	          const from = startOfDay(new Date(r.from));
+	          const to = startOfDay(new Date(r.to));
+	          if (!isValid(from) || !isValid(to)) return null;
+	          return { from, to };
+	        })
+	        .filter((x): x is { from: Date; to: Date } => Boolean(x));
+
+	      for (const p of nextManualBlockedPeriods) {
+	        const from = parseYmdDate(p.from);
+	        const to = parseYmdDate(p.to);
+	        if (!from || !to) continue;
+	        const manual = { from, to };
+	        if (icalMatchers.some((i) => !(manual.to < i.from || manual.from > i.to))) {
+	          return NextResponse.json(
+	            { error: "Blocage manuel impossible: chevauchement avec l’iCal." },
+	            { status: 400 }
+	          );
+	        }
+	      }
+	    }
+
+	    // Similar villas references (best-effort lookup by slug or name)
+	    let similarRefs: SanityRef[] | undefined = undefined;
+	    if (similarVillasSlugsOrNames.length > 0) {
       const foundIds: string[] = await client.fetch(
         `array::compact(array::unique(${JSON.stringify(similarVillasSlugsOrNames)}[].map(s){
           let q = *[_type=="villa" && (slug.current==s || name==s)][0]._id;
@@ -629,11 +788,21 @@ export async function POST(req: Request) {
       bedrooms,
       bathrooms,
 
-      priceMin,
-      priceMax: typeof priceMax === "number" ? priceMax : undefined,
-      cleaningIncluded: typeof cleaningIncluded === "boolean" ? cleaningIncluded : undefined,
-      cleaningPrice: typeof cleaningPrice === "number" ? cleaningPrice : undefined,
-      pricingCalendars: hasPricingCalendar ? nextPricingCalendars : undefined,
+	      priceMin,
+	      priceMax: typeof priceMax === "number" ? priceMax : undefined,
+	      availabilityIcalUrl: nextAvailabilityIcalUrl,
+	      cleaningIncluded: typeof cleaningIncluded === "boolean" ? cleaningIncluded : undefined,
+	      cleaningPrice: typeof cleaningPrice === "number" ? cleaningPrice : undefined,
+	      pricingCalendars: hasPricingCalendar ? nextPricingCalendars : undefined,
+	      manualBlockedPeriods: Array.isArray(nextManualBlockedPeriods)
+	        ? nextManualBlockedPeriods.map((p) => ({
+	            _key: randomUUID(),
+	            _type: "manualBlockedPeriod",
+	            from: p.from,
+	            to: p.to,
+	            comment: p.comment,
+	          }))
+	        : undefined,
 
       shortDescription,
       longDescription,
@@ -659,20 +828,24 @@ export async function POST(req: Request) {
       gallery,
     };
 
-    let villaId: string;
+	    let villaId: string;
 
-    if (!existingVilla) {
-      const createdVilla = await client.create(villaPayload);
-      villaId = createdVilla._id;
-    } else {
-      await client.patch(existingVilla._id).set(villaPayload).commit();
-      villaId = existingVilla._id;
-    }
+	    if (!existingVilla) {
+	      const createdVilla = await client.create(villaPayload);
+	      villaId = createdVilla._id;
+	    } else {
+	      await client.patch(existingVilla._id).set(villaPayload).commit();
+	      villaId = existingVilla._id;
+	    }
 
-    const origin = req.headers.get("origin") || "";
-    return NextResponse.json({
-      ok: true,
-      ownerUrl: `${origin}/owner/${ownerSlug}?key=${encodeURIComponent(
+	    // Rafraîchit immédiatement la page publique (évite que le calendrier reste sur une version en cache)
+	    revalidatePath(`/sites/${villaSlug}`, "page");
+	    revalidateTag(`villa:${villaSlug}`, "max");
+
+	    const origin = req.headers.get("origin") || "";
+	    return NextResponse.json({
+	      ok: true,
+	      ownerUrl: `${origin}/owner/${ownerSlug}?key=${encodeURIComponent(
         ownerPortalKey
       )}`,
       publicUrl: `${origin}/sites/${villaSlug}`,

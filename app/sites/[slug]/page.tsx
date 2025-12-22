@@ -17,25 +17,33 @@ import { BookingSidebar } from "@/app/sites/_components/BookingSidebar";
 
 import { getBlockedRangesFromIcal } from "../lib/getBlockedRangesFromIcal";
 import type { Villa } from "@/app/sites/_components/villa-types";
+import type { BlockedRange } from "../lib/getBlockedRangesFromIcal";
 
 export const revalidate = 60;
 
 const VILLA_DOC_TYPE = "villa" as const;
 
 async function getVillaBySlug(slug: string): Promise<Villa | null> {
+  const privateClient = client.withConfig({ useCdn: false });
   const query = `
-    *[_type == $docType && slug.current == $slug][0]{
-      "slug": slug.current,
-      name,
+	    *[_type == $docType && slug.current == $slug][0]{
+	      "slug": slug.current,
+	      name,
       region,
       country,
 
       // iCal
       availabilityIcalUrl,
+      "manualBlockedPeriods": coalesce(manualBlockedPeriods[]{ from, to, comment }, []),
 
-      // prix (si tes champs existent dans Sanity)
-      priceMin,
-      priceMax,
+	      // prix (si tes champs existent dans Sanity)
+	      priceMin,
+	      priceMax,
+	      "pricingCalendars": coalesce(pricingCalendars[]{
+	        year,
+	        defaultNightlyPrice,
+	        "overrides": coalesce(overrides[]{ from, to, nightlyPrice, label }, [])
+	      }, []),
 
       // adresse
       street,
@@ -86,13 +94,13 @@ async function getVillaBySlug(slug: string): Promise<Villa | null> {
         extraPersonsBadge,
         periodSuggestion
       }, [])
-    }
-  `;
+	    }
+	  `;
 
-  return client.fetch<Villa | null>(
+  return privateClient.fetch<Villa | null>(
     query,
     { docType: VILLA_DOC_TYPE, slug },
-    { next: { revalidate } },
+    { next: { revalidate, tags: [`villa:${slug}`] } },
   );
 }
 
@@ -113,6 +121,16 @@ export default async function VillaPage({ params }: { params: Promise<{ slug: st
 
   const blockedRanges = villa.availabilityIcalUrl
     ? await getBlockedRangesFromIcal(villa.availabilityIcalUrl)
+    : [];
+  const manualBlockedRanges: BlockedRange[] = Array.isArray(villa.manualBlockedPeriods)
+    ? villa.manualBlockedPeriods
+        .map((p) => {
+          const from = typeof p?.from === "string" ? p.from : "";
+          const to = typeof p?.to === "string" ? p.to : "";
+          if (!from || !to) return null;
+          return { from, to };
+        })
+        .filter((x): x is BlockedRange => Boolean(x))
     : [];
 
   return (
@@ -135,7 +153,7 @@ export default async function VillaPage({ params }: { params: Promise<{ slug: st
               <SimilarVillasSection villa={villa} />
             </div>
 
-            <BookingSidebar villa={villa} blockedRanges={blockedRanges} />
+            <BookingSidebar villa={villa} blockedRangesIcal={blockedRanges} blockedRangesManual={manualBlockedRanges} />
           </div>
         </section>
       </main>
